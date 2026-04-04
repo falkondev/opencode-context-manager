@@ -9,6 +9,7 @@ import {
   type ITokenComposition,
   type TimelineEventType,
 } from "../models/metrics.ts";
+import { logger } from "../utils/logger.ts";
 
 /**
  * Computes full ISessionMetrics from raw DB rows.
@@ -33,6 +34,14 @@ export class SessionAnalyzer {
       userMessages[0]?.data.model?.providerID ??
       "unknown";
     const agent = lastAssistant?.data.agent ?? userMessages[0]?.data.agent ?? "build";
+
+    if (modelId === "unknown") {
+      logger.warn("session-analyzer", `Model ID unknown for session ${session.id}`, {
+        title: session.title,
+        assistant_messages: assistantMessages.length,
+        user_messages: userMessages.length,
+      });
+    }
 
     // Token aggregation across all assistant messages
     const tokens = this.aggregateTokens(assistantMessages);
@@ -176,6 +185,8 @@ export class SessionAnalyzer {
         return limit;
       }
     }
+
+    logger.debug("session-analyzer", `No context limit entry for model "${modelId}" — using default ${DEFAULT_CONTEXT_LIMIT}`);
     return DEFAULT_CONTEXT_LIMIT;
   }
 

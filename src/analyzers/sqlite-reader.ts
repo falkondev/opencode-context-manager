@@ -8,6 +8,7 @@ import type {
   IMessageData,
   IPartData,
 } from "../models/session.ts";
+import { logger } from "../utils/logger.ts";
 
 /**
  * Direct SQLite reader for the OpenCode database.
@@ -18,10 +19,12 @@ export class SqliteReader {
 
   constructor(dbPath: string) {
     this.db = new Database(dbPath, { readonly: true, create: false });
+    logger.info("sqlite-reader", `Database opened (read-only): ${dbPath}`);
   }
 
   public close(): void {
     this.db.close();
+    logger.info("sqlite-reader", "Database closed");
   }
 
   // ─── Sessions ──────────────────────────────────────────────────────────────
@@ -121,7 +124,11 @@ export class SqliteReader {
     let data: IMessageData;
     try {
       data = JSON.parse(raw.data) as IMessageData;
-    } catch {
+    } catch (err) {
+      logger.warn("sqlite-reader", `Failed to parse message JSON id=${raw.id}`, {
+        error: err instanceof Error ? err.message : String(err),
+        raw_length: raw.data?.length ?? 0,
+      });
       data = { role: "user", agent: "unknown" };
     }
     return {
@@ -137,7 +144,11 @@ export class SqliteReader {
     let data: IPartData;
     try {
       data = JSON.parse(raw.data) as IPartData;
-    } catch {
+    } catch (err) {
+      logger.warn("sqlite-reader", `Failed to parse part JSON id=${raw.id}`, {
+        error: err instanceof Error ? err.message : String(err),
+        raw_length: raw.data?.length ?? 0,
+      });
       data = { type: "text", text: "" };
     }
     return {

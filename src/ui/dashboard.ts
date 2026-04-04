@@ -4,6 +4,7 @@ import type { ISessionMetrics, ISessionSummary, ITimelineEvent } from "../models
 import type { IAppConfig } from "../utils/config.ts";
 import { saveConfig } from "../utils/config.ts";
 import { t, setLanguage } from "../utils/i18n.ts";
+import { LOG_FILE } from "../utils/logger.ts";
 import {
   COLORS,
   fg,
@@ -425,8 +426,10 @@ export class Dashboard {
 
     const sessions = this.summaries.length;
     const count = fg(COLORS.muted, `${sessions} sessions`);
+    const logHint = fg(COLORS.muted, `log: ${LOG_FILE}`);
     const line1 = ` ${title}${right}  ${count}`;
-    this.headerBox.setContent(`${line1}\n ${fg(COLORS.muted, "─".repeat(60))}`);
+    const line2 = ` ${fg(COLORS.muted, "─".repeat(30))}  ${logHint}`;
+    this.headerBox.setContent(`${line1}\n${line2}`);
   }
 
   private renderSessionList(): void {

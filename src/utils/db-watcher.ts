@@ -1,4 +1,5 @@
 import { statSync } from "fs";
+import { logger } from "./logger.ts";
 
 type ChangeCallback = () => void;
 
@@ -47,12 +48,13 @@ export class DbWatcher {
   private check(): void {
     const mtime = this.getCurrentMtime();
     if (mtime !== this.lastMtime) {
+      logger.debug("db-watcher", `DB change detected (mtime ${this.lastMtime} → ${mtime})`);
       this.lastMtime = mtime;
       for (const cb of this.callbacks) {
         try {
           cb();
-        } catch {
-          // Ignore errors in callbacks
+        } catch (err) {
+          logger.error("db-watcher", "Callback error on DB change", err);
         }
       }
     }
@@ -61,7 +63,10 @@ export class DbWatcher {
   private getCurrentMtime(): number {
     try {
       return statSync(this.dbPath).mtimeMs;
-    } catch {
+    } catch (err) {
+      logger.warn("db-watcher", `Cannot stat DB file: ${this.dbPath}`, {
+        error: err instanceof Error ? err.message : String(err),
+      });
       return 0;
     }
   }

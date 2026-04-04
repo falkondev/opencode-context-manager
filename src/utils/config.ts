@@ -13,15 +13,18 @@ export const CONFIG_DIR = path.join(os.homedir(), ".config", "opencode-cm");
 export const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
 
 export type Language = "en" | "pt-BR";
+export type LogLevel = "debug" | "info" | "warn" | "error";
 
 export interface IAppConfig {
   language: Language;
   refreshInterval: number; // seconds
+  logLevel: LogLevel;
 }
 
 const DEFAULT_CONFIG: IAppConfig = {
   language: "en",
   refreshInterval: 2,
+  logLevel: "debug",
 };
 
 export function getOpencodePath(): string {
@@ -50,6 +53,7 @@ export function loadConfig(): IAppConfig {
     return {
       language: parsed.language ?? DEFAULT_CONFIG.language,
       refreshInterval: parsed.refreshInterval ?? DEFAULT_CONFIG.refreshInterval,
+      logLevel: parsed.logLevel ?? DEFAULT_CONFIG.logLevel,
     };
   } catch {
     return { ...DEFAULT_CONFIG };

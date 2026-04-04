@@ -7,6 +7,7 @@ import { SqliteReader } from "../analyzers/sqlite-reader.ts";
 import { SessionAnalyzer } from "../analyzers/session-analyzer.ts";
 import { DbWatcher } from "../utils/db-watcher.ts";
 import { loadConfig } from "../utils/config.ts";
+import { logger } from "../utils/logger.ts";
 
 type RefreshCallback = (sessions: ISessionSummary[], current: ISessionMetrics | null) => void;
 
@@ -66,12 +67,22 @@ export class SessionManager {
     try {
       // Reload sessions list
       this.sessions = this.reader.listSessions(50);
+      logger.debug("session-manager", `Loaded ${this.sessions.length} sessions`);
 
       // Build summaries quickly (without loading all parts)
       this.summaries = this.sessions.map((s) => {
         const messages = this.reader.getMessagesForSession(s.id);
         const parts = this.reader.getPartsForSession(s.id);
         const metrics = this.analyzer.analyze(s, messages, parts);
+        logger.debug("session-manager", `Analyzed session ${s.id}`, {
+          title: s.title,
+          messages: messages.length,
+          parts: parts.length,
+          tokens: metrics.tokens.total,
+          context_pct: metrics.context_percentage,
+          model: metrics.model_id,
+          is_live: metrics.is_live,
+        });
         return this.analyzer.toSummary(metrics);
       });
 
@@ -84,23 +95,43 @@ export class SessionManager {
         this.currentMetrics = this.loadSessionMetrics(this.sessions[0].id);
       }
 
+      logger.info("session-manager", "Refresh complete", {
+        sessions: this.summaries.length,
+        current: this.currentSessionId ?? "none",
+      });
       this.notify();
-    } catch {
-      // Non-fatal — will retry on next poll
+    } catch (err) {
+      logger.error("session-manager", "refresh() failed — will retry on next poll", err);
     }
   }
 
   private loadSessionMetrics(sessionId: string): ISessionMetrics | null {
     try {
       const session = this.reader.getSession(sessionId);
-      if (!session) return null;
+      if (!session) {
+        logger.warn("session-manager", `Session not found: ${sessionId}`);
+        return null;
+      }
 
       const messages = this.reader.getMessagesForSession(sessionId);
       const parts = this.reader.getPartsForSession(sessionId);
       const metrics = this.analyzer.analyze(session, messages, parts);
       this.currentMetrics = metrics;
+
+      logger.debug("session-manager", `Loaded metrics for session ${sessionId}`, {
+        model: metrics.model_id,
+        tokens: metrics.tokens,
+        cost: metrics.cost,
+        context_pct: metrics.context_percentage,
+        tool_calls: metrics.tool_calls_count,
+        steps: metrics.step_count,
+        finish_reason: metrics.finish_reason,
+        is_live: metrics.is_live,
+      });
+
       return metrics;
-    } catch {
+    } catch (err) {
+      logger.error("session-manager", `loadSessionMetrics(${sessionId}) failed`, err);
       return null;
     }
   }
@@ -109,8 +140,8 @@ export class SessionManager {
     for (const cb of this.callbacks) {
       try {
         cb(this.summaries, this.currentMetrics);
-      } catch {
-        // Ignore errors in callbacks
+      } catch (err) {
+        logger.error("session-manager", "Callback error in notify()", err);
       }
     }
   }
