@@ -1,0 +1,25 @@
+{
+  "name": "opencode-context-manager",
+  "module": "src/index.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "bun run --watch src/index.ts",
+    "build": "bun build src/index.ts --outdir dist --target node",
+    "test": "bun test",
+    "test:dev": "bun test --watch",
+    "lint": "bunx eslint src",
+    "lint:fix": "bunx eslint src --fix",
+    "type-check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/node": "^25.5.2"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "path": "^0.12.7"
+  }
+}

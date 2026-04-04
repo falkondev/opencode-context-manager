@@ -1,0 +1,18 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "SQLIte MCP Server Opencode Folder": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "mcp-sqlite",
+        "/home/marlon/.local/share/opencode/opencode.db"
+      ]
+    },
+    "opencode Docs": {
+      "type": "remote",
+      "url": "https://gitmcp.io/anomalyco/opencode"
+    }
+  }
+}
