@@ -30,6 +30,13 @@ export const COLORS = {
   compSystemPrompt: "#ff8700", // orange — will fallback to 'yellow' in 256color
   compUserText: "green",
   compOutput: "magenta",
+  compConversation: "blue",   // cached conversation (cache_read from peak turn)
+  compFreeSpace: "gray",      // unused context window capacity
+
+  // Subagent indicators
+  subagentExplore: "cyan",
+  subagentGeneral: "magenta",
+  subagentDefault: "white",
 
   // Timeline event types
   timelineSessionCreated: "white",

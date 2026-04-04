@@ -123,11 +123,41 @@ export interface IPartDataPatch {
   diffs?: unknown[];
 }
 
+// Task tool invocation — spawns a subagent session
+export interface IPartDataTaskInput {
+  description: string;
+  prompt: string;
+  subagent_type: string; // "explore" | "general" | etc.
+  task_id?: string;      // present when resuming a previous subagent session
+}
+
+export interface IPartDataTaskMetadata {
+  sessionId: string; // the child session ID
+  model: { modelID: string; providerID: string };
+  truncated?: boolean;
+}
+
+export interface IPartDataTask {
+  type: "tool";
+  tool: "task";
+  callID: string;
+  state: {
+    status: "running" | "completed" | "error";
+    input: IPartDataTaskInput;
+    output?: string;
+    error?: string;
+    metadata?: IPartDataTaskMetadata;
+    title?: string;
+    time?: { start?: number; end?: number };
+  };
+}
+
 export type IPartData =
   | IPartDataText
   | IPartDataStepStart
   | IPartDataStepFinish
   | IPartDataTool
+  | IPartDataTask
   | IPartDataPatch;
 
 // Enriched message with parsed data

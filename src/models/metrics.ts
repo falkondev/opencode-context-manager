@@ -31,13 +31,27 @@ export interface ITimelineEvent {
   detail?: string;
 }
 
-// Estimated breakdown of what consumed input tokens
+// Estimated breakdown of what consumed the cold-turn input tokens
 
 export interface ITokenComposition {
   system_prompt_tokens: number; // estimated
   auto_context_tokens: number; // from summary diffs
   user_text_tokens: number; // from text parts
   total_input: number;
+}
+
+// Metrics for a subagent (child session) spawned via the task tool
+
+export interface ISubagentMetrics {
+  session_id: string;
+  agent_type: string;        // "explore" | "general" | etc.
+  description: string;       // from the task tool input.description
+  model_id: string;
+  peak_tokens: number;       // peak turn total in the child session
+  context_limit: number;
+  context_percentage: number;
+  cost: number;
+  duration_ms: number;       // from task tool state.time (start → end)
 }
 
 // Context window limits by model ID
@@ -72,13 +86,21 @@ export interface ISessionMetrics {
   provider_id: string;
   agent: string;
 
-  // Tokens
+  // Tokens aggregated across all turns (useful for billing/cost totals)
   tokens: ITokenMetrics;
+  // Tokens of the single peak turn (highest total). This represents the actual
+  // context window state at its most occupied point: input, output, and cache_read
+  // all belong to that one turn and sum to <= context_limit.
+  peak_turn_tokens: ITokenMetrics;
   token_composition: ITokenComposition;
 
   // Context window
   context_limit: number;
   context_percentage: number;
+  // Peak single-turn total (used for context bar display and "free tokens" calculation).
+  // In multi-turn sessions each turn's total already includes cached prior context,
+  // so this is max(total per turn) rather than sum(all totals).
+  peak_context_tokens: number;
 
   // Costs & completion
   cost: number;
@@ -95,6 +117,9 @@ export interface ISessionMetrics {
   // Step counts
   tool_calls_count: number;
   step_count: number;
+
+  // Subagents spawned by this session (child sessions via the task tool)
+  subagents: ISubagentMetrics[];
 
   // Timeline
   timeline: ITimelineEvent[];

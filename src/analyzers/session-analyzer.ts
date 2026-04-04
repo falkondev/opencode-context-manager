@@ -1,9 +1,10 @@
-import type { IDbSession, IMessage, IPart, ITokens, IPartDataStepFinish } from "../models/session.ts";
+import type { IDbSession, IMessage, IPart, ITokens, IPartDataStepFinish, IPartDataTask } from "../models/session.ts";
 import {
   CONTEXT_LIMITS,
   DEFAULT_CONTEXT_LIMIT,
   type ISessionMetrics,
   type ISessionSummary,
+  type ISubagentMetrics,
   type ITimelineEvent,
   type ITokenMetrics,
   type ITokenComposition,
@@ -19,6 +20,7 @@ export class SessionAnalyzer {
     session: IDbSession,
     messages: IMessage[],
     parts: IPart[],
+    childSessions: Array<{ session: IDbSession; messages: IMessage[] }> = [],
   ): ISessionMetrics {
     const assistantMessages = messages.filter((m) => m.data.role === "assistant");
     const userMessages = messages.filter((m) => m.data.role === "user");
@@ -47,9 +49,17 @@ export class SessionAnalyzer {
     const tokens = this.aggregateTokens(assistantMessages);
 
     // Context window
-    const contextLimit = this.getContextLimit(modelId);
+    // In multi-turn sessions each message's `total` already includes cache tokens
+    // from the previous context, so summing all totals double-counts context.
+    // The correct context usage metric is the peak (max) total seen in any single
+    // turn, which represents how much of the context window was actually occupied.
+    const peakTurnTokens = this.getPeakTurnTokens(assistantMessages);
+    const peakContextTokens = peakTurnTokens.total;
+    // Use the model of the peak turn to determine the correct context limit —
+    // sessions may span multiple models (e.g. haiku → sonnet switch mid-session).
+    const contextLimit = this.getContextLimit(peakTurnTokens.modelId !== "unknown" ? peakTurnTokens.modelId : modelId);
     const contextPercentage =
-      tokens.total > 0 ? Math.round((tokens.total / contextLimit) * 100) : 0;
+      peakContextTokens > 0 ? Math.round((peakContextTokens / contextLimit) * 100) : 0;
 
     // Cost & finish reason from last completed assistant message
     const lastCompleted = [...assistantMessages]
@@ -91,8 +101,11 @@ export class SessionAnalyzer {
     const stepCount = stepFinishParts.length;
 
     // Token composition estimation
+    // Pass the first assistant message (cold turn, no cache yet) as the
+    // reference for estimating how the input was composed.
+    const firstAssistant = assistantMessages[0];
     const tokenComposition = this.estimateComposition(
-      tokens,
+      firstAssistant,
       parts,
       userMessages,
       injectedDiffsCount,
@@ -101,6 +114,14 @@ export class SessionAnalyzer {
 
     // Timeline
     const timeline = this.buildTimeline(session, messages, parts);
+
+    // Subagents: resolve each child session using task tool parts in this session
+    const taskParts = parts.filter(
+      (p): p is IPart & { data: IPartDataTask } =>
+        p.data.type === "tool" &&
+        (p.data as IPartDataTask).tool === "task",
+    );
+    const subagents = this.buildSubagentMetrics(taskParts, childSessions);
 
     // Live detection: has assistant message with no completion time
     const isLive =
@@ -113,9 +134,11 @@ export class SessionAnalyzer {
       provider_id: providerId,
       agent,
       tokens,
+      peak_turn_tokens: peakTurnTokens,
       token_composition: tokenComposition,
       context_limit: contextLimit,
       context_percentage: contextPercentage,
+      peak_context_tokens: peakContextTokens,
       cost,
       finish_reason: finishReason,
       duration_total_ms: Math.max(0, durationTotalMs),
@@ -124,6 +147,7 @@ export class SessionAnalyzer {
       user_message_byte_size: userMsgByteSize,
       tool_calls_count: toolCallsCount,
       step_count: stepCount,
+      subagents,
       timeline,
       is_live: isLive,
     };
@@ -170,6 +194,40 @@ export class SessionAnalyzer {
     return { total, input, output, reasoning, cache_read: cacheRead, cache_write: cacheWrite };
   }
 
+  /**
+   * Returns the ITokenMetrics for the single turn with the highest total,
+   * along with the modelId of that turn.
+   * This turn's tokens (input + output + cache_read) represent what actually
+   * occupied the context window at peak usage — suitable for composition display.
+   * peak_turn.total is also used as the context window usage metric.
+   */
+  private getPeakTurnTokens(assistantMsgs: IMessage[]): ITokenMetrics & { modelId: string } {
+    let peakTotal = 0;
+    let peakMsg: IMessage | undefined;
+    for (const msg of assistantMsgs) {
+      const t = msg.data.tokens;
+      if (!t) continue;
+      const turn = t.total ?? t.input + t.output;
+      if (turn > peakTotal) {
+        peakTotal = turn;
+        peakMsg = msg;
+      }
+    }
+    if (!peakMsg?.data.tokens) {
+      return { total: 0, input: 0, output: 0, reasoning: 0, cache_read: 0, cache_write: 0, modelId: "unknown" };
+    }
+    const t = peakMsg.data.tokens;
+    return {
+      total: t.total ?? t.input + t.output,
+      input: t.input,
+      output: t.output,
+      reasoning: t.reasoning,
+      cache_read: t.cache.read,
+      cache_write: t.cache.write,
+      modelId: peakMsg.data.modelID ?? "unknown",
+    };
+  }
+
   private sumCost(assistantMsgs: IMessage[]): number {
     return assistantMsgs.reduce((acc, m) => acc + (m.data.cost ?? 0), 0);
   }
@@ -207,37 +265,50 @@ export class SessionAnalyzer {
   }
 
   private estimateComposition(
-    tokens: ITokenMetrics,
+    firstAssistantMsg: IMessage | undefined,
     parts: IPart[],
     userMessages: IMessage[],
     injectedDiffs: number,
     userMsgByteSize: number,
   ): ITokenComposition {
-    // User text: count characters in all text parts from user messages
+    // The first assistant message is the "cold" turn where nothing is cached yet.
+    // Its input tokens represent the actual tokens the model processed for the
+    // first time: system prompt + auto-context diffs + user text.
+    // Subsequent turns reuse cached context, so they don't help estimate composition.
+    const coldInputTokens = firstAssistantMsg?.data.tokens?.input ?? 0;
+    const coldTotal = firstAssistantMsg?.data.tokens
+      ? (firstAssistantMsg.data.tokens.total ?? coldInputTokens)
+      : 0;
+
+    // User text: count characters only in text parts belonging to user messages.
+    // Parts also exist on assistant messages (model responses), so we must
+    // restrict to parts whose message_id matches a user message id.
+    const userMessageIds = new Set(userMessages.map((m) => m.id));
     const userTextChars = parts
-      .filter((p) => p.data.type === "text")
+      .filter((p) => p.data.type === "text" && userMessageIds.has(p.message_id))
       .map((p) => (p.data.type === "text" ? p.data.text?.length ?? 0 : 0))
       .reduce((a, b) => a + b, 0);
 
-    const userTextTokens = Math.round(userTextChars / 4);
+    const userTextTokens = Math.min(Math.round(userTextChars / 4), coldInputTokens);
 
     // Auto-context: serialized diffs in user message data beyond user text
-    // Estimated as: (total user message data - user text) / 4 chars per token
     const autoContextChars = Math.max(0, userMsgByteSize - userTextChars);
     const autoContextTokens =
-      injectedDiffs > 0 ? Math.round(autoContextChars / 4) : 0;
+      injectedDiffs > 0
+        ? Math.min(Math.round(autoContextChars / 4), coldInputTokens - userTextTokens)
+        : 0;
 
-    // System prompt: remaining input tokens
+    // System prompt: remaining cold input after user text and auto-context
     const systemPromptTokens = Math.max(
       0,
-      tokens.input - userTextTokens - autoContextTokens,
+      coldInputTokens - userTextTokens - autoContextTokens,
     );
 
     return {
       system_prompt_tokens: systemPromptTokens,
       auto_context_tokens: autoContextTokens,
       user_text_tokens: userTextTokens,
-      total_input: tokens.input,
+      total_input: coldTotal,
     };
   }
 
@@ -325,5 +396,70 @@ export class SessionAnalyzer {
     // Sort by timestamp
     events.sort((a, b) => a.timestamp - b.timestamp);
     return events;
+  }
+
+  /**
+   * Builds ISubagentMetrics for all completed task tool invocations.
+   * Correlates each task part with its child session by sessionId in metadata.
+   */
+  private buildSubagentMetrics(
+    taskParts: Array<IPart & { data: IPartDataTask }>,
+    childSessions: Array<{ session: IDbSession; messages: IMessage[] }>,
+  ): ISubagentMetrics[] {
+    const results: ISubagentMetrics[] = [];
+
+    for (const part of taskParts) {
+      const state = part.data.state;
+      // Only completed tasks have usable data
+      if (state.status !== "completed") continue;
+
+      const childSessionId = state.metadata?.sessionId;
+      const agentType = state.input.subagent_type ?? "unknown";
+      const description = state.input.description ?? "";
+      const modelId = state.metadata?.model?.modelID ?? "unknown";
+
+      // Compute duration from task tool timing
+      const durationMs =
+        state.time?.start !== undefined && state.time?.end !== undefined
+          ? Math.max(0, state.time.end - state.time.start)
+          : 0;
+
+      // Find child session messages if available
+      const childEntry = childSessions.find(
+        (c) => c.session.id === childSessionId,
+      );
+      const childMessages = childEntry?.messages ?? [];
+      const childAssistant = childMessages.filter(
+        (m) => m.data.role === "assistant",
+      );
+
+      // Peak turn from child session (same logic as parent)
+      const peakTurn = this.getPeakTurnTokens(childAssistant);
+      const peakTokens = peakTurn.total;
+
+      // Use child model for context limit; fall back to task metadata model
+      const effectiveModel =
+        peakTurn.modelId !== "unknown" ? peakTurn.modelId : modelId;
+      const contextLimit = this.getContextLimit(effectiveModel);
+      const contextPercentage =
+        peakTokens > 0 ? Math.round((peakTokens / contextLimit) * 100) : 0;
+
+      // Cost is sum across all child assistant messages
+      const cost = this.sumCost(childAssistant);
+
+      results.push({
+        session_id: childSessionId ?? "",
+        agent_type: agentType,
+        description,
+        model_id: effectiveModel,
+        peak_tokens: peakTokens,
+        context_limit: contextLimit,
+        context_percentage: contextPercentage,
+        cost,
+        duration_ms: durationMs,
+      });
+    }
+
+    return results;
   }
 }

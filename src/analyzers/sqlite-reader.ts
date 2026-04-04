@@ -35,6 +35,7 @@ export class SqliteReader {
               share_url, summary_additions, summary_deletions, summary_files,
               summary_diffs, time_created, time_updated, time_archived, workspace_id
        FROM session
+       WHERE parent_id IS NULL
        ORDER BY time_updated DESC
        LIMIT ?`,
     );
@@ -49,6 +50,22 @@ export class SqliteReader {
        FROM session WHERE id = ?`,
     );
     return query.get(id) ?? null;
+  }
+
+  /**
+   * Returns all direct child sessions for a given parent session id,
+   * ordered by creation time. These are subagent sessions.
+   */
+  public getChildSessions(parentId: string): IDbSession[] {
+    const query = this.db.query<IDbSession, [string]>(
+      `SELECT id, project_id, parent_id, slug, directory, title, version,
+              share_url, summary_additions, summary_deletions, summary_files,
+              summary_diffs, time_created, time_updated, time_archived, workspace_id
+       FROM session
+       WHERE parent_id = ?
+       ORDER BY time_created ASC`,
+    );
+    return query.all(parentId) as unknown as IDbSession[];
   }
 
   // ─── Messages ──────────────────────────────────────────────────────────────

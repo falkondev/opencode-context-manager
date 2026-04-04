@@ -483,18 +483,19 @@ export class Dashboard {
     const bar = asciiBar(pct, BAR_WIDTH, color, "black");
     const pctLabel = fgBold(color, `${pct}%`);
     lines.push(`  ${fgBold(COLORS.header, t("context.percentage"))}  ${pctLabel}`);
-    lines.push(`  ${bar}  ${fg(COLORS.muted, fmtTokens(m.tokens.total) + " / " + fmtTokens(m.context_limit))}`);
-    lines.push(`  ${fg(COLORS.muted, fmtTokens(m.context_limit - m.tokens.total) + " " + t("misc.free"))}`);
+    lines.push(`  ${bar}  ${fg(COLORS.muted, fmtTokens(m.peak_context_tokens) + " / " + fmtTokens(m.context_limit))}`);
+    lines.push(`  ${fg(COLORS.muted, fmtTokens(m.context_limit - m.peak_context_tokens) + " " + t("misc.free"))}`);
     lines.push("");
 
-    // Token bars
-    const total = m.tokens.total;
-    const inputPct = total > 0 ? (m.tokens.input / total) * 100 : 0;
-    const outputPct = total > 0 ? (m.tokens.output / total) * 100 : 0;
-    const cachePct = total > 0 ? (m.tokens.cache_read / total) * 100 : 0;
-    const reasoningPct = total > 0 ? (m.tokens.reasoning / total) * 100 : 0;
+    // Token bars — percentages relative to the peak turn total so they reflect
+    // the actual composition of the context window at its most occupied point.
+    const peakTotal = m.peak_turn_tokens.total;
+    const inputPct = peakTotal > 0 ? (m.peak_turn_tokens.input / peakTotal) * 100 : 0;
+    const outputPct = peakTotal > 0 ? (m.peak_turn_tokens.output / peakTotal) * 100 : 0;
+    const cachePct = peakTotal > 0 ? (m.peak_turn_tokens.cache_read / peakTotal) * 100 : 0;
+    const reasoningPct = peakTotal > 0 ? (m.peak_turn_tokens.reasoning / peakTotal) * 100 : 0;
 
-    lines.push(`  ${fgBold("white", t("tokens.total"))}  ${fgBold("white", fmtTokens(total))}`);
+    lines.push(`  ${fgBold("white", t("tokens.billing_total"))}  ${fgBold("white", fmtTokens(m.tokens.total))}`);
     lines.push("");
 
     const renderBar = (label: string, pctVal: number, count: number, color: string) => {
@@ -504,13 +505,13 @@ export class Dashboard {
       return `  ${pad(label, 10)} ${bar}  ${pctStr}  ${cnt}`;
     };
 
-    lines.push(renderBar(t("tokens.input"), inputPct, m.tokens.input, COLORS.tokenInput));
-    lines.push(renderBar(t("tokens.output"), outputPct, m.tokens.output, COLORS.tokenOutput));
-    if (m.tokens.cache_read > 0) {
-      lines.push(renderBar(t("tokens.cache_read"), cachePct, m.tokens.cache_read, COLORS.tokenCache));
+    lines.push(renderBar(t("tokens.input"), inputPct, m.peak_turn_tokens.input, COLORS.tokenInput));
+    lines.push(renderBar(t("tokens.output"), outputPct, m.peak_turn_tokens.output, COLORS.tokenOutput));
+    if (m.peak_turn_tokens.cache_read > 0) {
+      lines.push(renderBar(t("tokens.cache_read"), cachePct, m.peak_turn_tokens.cache_read, COLORS.tokenCache));
     }
-    if (m.tokens.reasoning > 0) {
-      lines.push(renderBar(t("tokens.reasoning"), reasoningPct, m.tokens.reasoning, COLORS.tokenReasoning));
+    if (m.peak_turn_tokens.reasoning > 0) {
+      lines.push(renderBar(t("tokens.reasoning"), reasoningPct, m.peak_turn_tokens.reasoning, COLORS.tokenReasoning));
     }
     lines.push("");
 
@@ -544,44 +545,139 @@ export class Dashboard {
 
     const lines: string[] = [];
     const comp = m.token_composition;
-    const totalInput = m.tokens.input;
+    const limit = m.context_limit;
+    const peak = m.peak_turn_tokens;
 
+    // ── Header: "Context Usage" title line ─────────────────────────────────
     lines.push("");
-    lines.push(`  ${fgBold(COLORS.header, t("panel.composition"))} ${fg(COLORS.muted, t("composition.estimated"))}`);
+    lines.push(`  ${fgBold(COLORS.header, t("context.header"))}`);
+    lines.push(
+      `  ${fgBold("white", shortModelId(m.model_id))} · ` +
+      `${fg("white", fmtTokens(m.peak_context_tokens, true))}/${fmtTokens(limit, true)} tokens ` +
+      `(${fg(gaugeColor(m.context_percentage), `${m.context_percentage}%`)})`,
+    );
     lines.push("");
 
-    const renderRow = (label: string, tokens: number, color: string, symbol: string) => {
-      const pct = totalInput > 0 ? (tokens / totalInput) * 100 : 0;
-      const bar = asciiBar(pct, 14, color, "black");
-      const pctStr = fg(color, pad(fmtPercent(pct), 7, true));
-      const cnt = fg(COLORS.muted, fmtTokens(tokens, true));
-      return `  ${fg(color, symbol)} ${pad(truncate(label, 12), 12)} ${bar} ${pctStr} ${cnt}`;
+    // ── Breakdown rows — all percentages relative to context_limit ──────────
+    // Each row is a non-overlapping segment of the context window.
+    // Together they sum exactly to 100% of context_limit:
+    //
+    //   new_input  +  cache_read  +  output  +  free  =  context_limit  ✓
+    //
+    // "New input"    = peak_turn.input  (fresh tokens processed in peak turn)
+    // "Conversation" = peak_turn.cache_read  (prior turns loaded from cache)
+    // "Output"       = peak_turn.output  (tokens generated in peak turn)
+    // "Free space"   = context_limit - peak_turn.total
+
+    const newInputPct = limit > 0 ? (peak.input      / limit) * 100 : 0;
+    const convPct     = limit > 0 ? (peak.cache_read  / limit) * 100 : 0;
+    const outputPct   = limit > 0 ? (peak.output      / limit) * 100 : 0;
+    const freePct     = limit > 0 ? Math.max(0, ((limit - m.peak_context_tokens) / limit) * 100) : 100;
+
+    const BAR = 16;
+
+    const renderRow = (
+      symbol: string,
+      label: string,
+      pctVal: number,
+      tokenCount: number,
+      color: string,
+    ) => {
+      const bar    = asciiBar(pctVal, BAR, color, "black");
+      const pctStr = fg(color, pad(fmtPercent(pctVal), 7, true));
+      const cnt    = fg(COLORS.muted, fmtTokens(tokenCount, true) + " tokens");
+      return `  ${fg(color, symbol)} ${pad(truncate(label, 14), 14)} ${bar} ${pctStr} ${cnt}`;
     };
 
-    lines.push(renderRow(t("composition.auto_context"), comp.auto_context_tokens, COLORS.compAutoContext, "■"));
-    lines.push(renderRow(t("composition.system_prompt"), comp.system_prompt_tokens, "yellow", "■"));
-    lines.push(renderRow(t("composition.user_text"), comp.user_text_tokens, COLORS.compUserText, "■"));
-    lines.push(renderRow(t("composition.output"), m.tokens.output, COLORS.compOutput, "■"));
+    lines.push(renderRow("■", t("context.new_input"),    newInputPct, peak.input,    COLORS.compUserText));
+    if (peak.cache_read > 0) {
+      lines.push(renderRow("■", t("context.conversation"), convPct, peak.cache_read, COLORS.compConversation));
+    }
+    if (peak.output > 0) {
+      lines.push(renderRow("■", t("tokens.output"),        outputPct, peak.output,   COLORS.tokenOutput));
+    }
+    lines.push(renderRow("░", t("context.free_space"),    freePct,   limit - m.peak_context_tokens, COLORS.compFreeSpace));
 
-    if (m.tokens.cache_read > 0) {
-      lines.push(renderRow(t("tokens.cache_read"), m.tokens.cache_read, COLORS.tokenCache, "■"));
+    // ── Initial input breakdown (secondary, informative only) ───────────────
+    // These are estimates from the cold turn (turn 1) showing how "New input"
+    // was composed. They are already included in peak.input / cache_read above
+    // and must NOT be added to the context window total again.
+    const hasComposition =
+      comp.system_prompt_tokens > 0 ||
+      comp.auto_context_tokens > 0 ||
+      comp.user_text_tokens > 0;
+
+    if (hasComposition) {
+      lines.push("");
+      lines.push(`  ${fg(COLORS.muted, t("context.initial_composition"))}`);
+
+      const coldTotal = comp.system_prompt_tokens + comp.auto_context_tokens + comp.user_text_tokens;
+      const renderSubRow = (label: string, count: number, color: string) => {
+        const subPct = coldTotal > 0 ? (count / coldTotal) * 100 : 0;
+        const bar    = asciiBar(subPct, BAR, color, "black");
+        const pctStr = fg(color, pad(fmtPercent(subPct), 7, true));
+        const cnt    = fg(COLORS.muted, fmtTokens(count, true) + " tokens");
+        return `  ${fg(COLORS.muted, "·")} ${pad(truncate(label, 14), 14)} ${bar} ${pctStr} ${cnt}`;
+      };
+
+      if (comp.system_prompt_tokens > 0) {
+        lines.push(renderSubRow(t("context.system_prompt"), comp.system_prompt_tokens, "yellow"));
+      }
+      if (comp.auto_context_tokens > 0) {
+        lines.push(renderSubRow(t("context.auto_context"), comp.auto_context_tokens, COLORS.compAutoContext));
+      }
+      if (comp.user_text_tokens > 0) {
+        lines.push(renderSubRow(t("context.user_messages"), comp.user_text_tokens, COLORS.compUserText));
+      }
     }
 
-    lines.push("");
-
-    // Auto-context warning
+    // ── Auto-context warning ────────────────────────────────────────────────
     if (m.injected_diffs_count > 0) {
-      const diffsPct = totalInput > 0 ? Math.round((comp.auto_context_tokens / totalInput) * 100) : 0;
-      lines.push(`  ${fg(COLORS.warning, "⚠")} ${fg(COLORS.warning, `${m.injected_diffs_count} ${t("composition.diffs_injected")}`)}`);
-      lines.push(`  ${fg(COLORS.muted, "  " + diffsPct + "% of input was auto-injected")}`);
+      lines.push("");
+      lines.push(
+        `  ${fg(COLORS.warning, "⚠")} ` +
+        `${fg(COLORS.warning, `${m.injected_diffs_count} ${t("composition.diffs_injected")}`)}`
+      );
     }
 
+    // ── Subagents section ───────────────────────────────────────────────────
+    if (m.subagents.length > 0) {
+      lines.push("");
+      lines.push(
+        `  ${fgBold(COLORS.header, t("context.subagents"))}` +
+        `  ${fg(COLORS.muted, `${m.subagents.length} ${t("context.tasks")}`)}`
+      );
+
+      m.subagents.forEach((sub, i) => {
+        const isLast   = i === m.subagents.length - 1;
+        const branch   = isLast ? "└" : "├";
+        const agentColor =
+          sub.agent_type === "explore" ? COLORS.subagentExplore :
+          sub.agent_type === "general" ? COLORS.subagentGeneral :
+          COLORS.subagentDefault;
+
+        const subPct    = fg(gaugeColor(sub.context_percentage), `${sub.context_percentage}%`);
+        const subTokens = fg(COLORS.muted, fmtTokens(sub.peak_tokens, true));
+        const dur       = sub.duration_ms > 0 ? fg(COLORS.muted, ` ${fmtDuration(sub.duration_ms)}`) : "";
+        const desc      = truncate(sub.description, 18);
+
+        lines.push(
+          `  ${fg(COLORS.muted, branch)} ${fg(agentColor, "@" + sub.agent_type)}` +
+          `  ${fg("white", desc)}` +
+          `  ${subTokens} ${subPct}${dur}`
+        );
+      });
+    }
+
+    // ── Session metadata ────────────────────────────────────────────────────
     lines.push("");
-    lines.push(`  ${fg(COLORS.muted, "─".repeat(20))}`);
+    lines.push(`  ${fg(COLORS.muted, "─".repeat(22))}`);
     lines.push(`  ${fg(COLORS.muted, "Created")}  ${fg("white", fmtTimestamp(m.session.time_created))}`);
     lines.push(`  ${fg(COLORS.muted, "Updated")}  ${fg("white", fmtTimeAgo(m.session.time_updated))}`);
-    lines.push(`  ${fg(COLORS.muted, "Files Δ")}  ${fg("cyan", `+${m.session.summary_additions ?? 0}`)}`+
-      `  ${fg("magenta", `-${m.session.summary_deletions ?? 0}`)}`);
+    lines.push(
+      `  ${fg(COLORS.muted, "Files \u0394")}  ${fg("cyan", `+${m.session.summary_additions ?? 0}`)}` +
+      `  ${fg("magenta", `-${m.session.summary_deletions ?? 0}`)}`,
+    );
 
     this.tokenBox.setContent(lines.join("\n"));
   }
@@ -880,5 +976,4 @@ export class Dashboard {
     this.contextBox.options.label = ` ${t("panel.context")} `;
     this.tokenBox.options.label = ` ${t("panel.composition")} `;
     this.timelineBox.options.label = ` ${t("panel.timeline")} `;
-  }
-}
+  }}

@@ -115,7 +115,15 @@ export class SessionManager {
 
       const messages = this.reader.getMessagesForSession(sessionId);
       const parts = this.reader.getPartsForSession(sessionId);
-      const metrics = this.analyzer.analyze(session, messages, parts);
+
+      // Load child (subagent) sessions so the analyzer can compute subagent metrics
+      const childDbSessions = this.reader.getChildSessions(sessionId);
+      const childSessions = childDbSessions.map((cs) => ({
+        session: cs,
+        messages: this.reader.getMessagesForSession(cs.id),
+      }));
+
+      const metrics = this.analyzer.analyze(session, messages, parts, childSessions);
       this.currentMetrics = metrics;
 
       logger.debug("session-manager", `Loaded metrics for session ${sessionId}`, {
@@ -127,6 +135,7 @@ export class SessionManager {
         steps: metrics.step_count,
         finish_reason: metrics.finish_reason,
         is_live: metrics.is_live,
+        subagents: metrics.subagents.length,
       });
 
       return metrics;
