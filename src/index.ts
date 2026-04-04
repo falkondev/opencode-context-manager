@@ -1,24 +1,63 @@
-import path from "path";
-import os from "os";
+import { getDbPath, dbExists, loadConfig } from "./utils/config.ts";
+import { setLanguage } from "./utils/i18n.ts";
+import { SessionManager } from "./managers/session-manager.ts";
+import { Dashboard } from "./ui/dashboard.ts";
 
-const OPENCODE_DEFAULT_PATH = path.join(
-  os.homedir(),
-  ".local",
-  "share",
-  "opencode",
-);
+async function main(): Promise<void> {
+  // Load user config
+  const config = loadConfig();
+  setLanguage(config.language);
 
-const OPENCODE_PATH = process.env["OPENCODE_PATH"] ?? OPENCODE_DEFAULT_PATH;
+  // Verify OpenCode database exists
+  if (!dbExists()) {
+    const dbPath = getDbPath();
+    console.error(`\n  OpenCode database not found: ${dbPath}`);
+    console.error("  Run OpenCode at least once, then restart this tool.\n");
+    process.exit(1);
+  }
 
-function printBanner(): void {
-  console.log("");
-  console.log("  opencode-context-manager");
-  console.log("  ─────────────────────────────────────────");
-  console.log("  Manages OpenCode AI sessions and context.");
-  console.log("");
-  console.log(`  OpenCode path : ${OPENCODE_PATH}`);
-  console.log(`  Database      : ${path.join(OPENCODE_PATH, "opencode.db")}`);
-  console.log("");
+  const dbPath = getDbPath();
+
+  // Initialise data layer
+  const manager = new SessionManager(dbPath);
+
+  // Initialise UI
+  const dashboard = new Dashboard(config);
+
+  // Wire up: session selection from UI → manager
+  dashboard.onSelect((id) => {
+    const metrics = manager.selectSession(id);
+    if (metrics) {
+      dashboard.update(manager.getSummaries(), metrics);
+    }
+  });
+
+  // Wire up: refresh request from UI → manager
+  dashboard.onRefresh(() => {
+    manager.refresh();
+  });
+
+  // Wire up: data changes from manager → UI
+  manager.onRefresh((summaries, current) => {
+    dashboard.update(summaries, current);
+  });
+
+  // Start polling and initial load
+  manager.start();
+
+  // Clean shutdown on process signals
+  const shutdown = () => {
+    manager.stop();
+    dashboard.destroy();
+    process.exit(0);
+  };
+
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
 }
 
-printBanner();
+main().catch((err: unknown) => {
+  const msg = err instanceof Error ? err.message : String(err);
+  console.error(`\n  Fatal error: ${msg}\n`);
+  process.exit(1);
+});

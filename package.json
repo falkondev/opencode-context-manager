@@ -4,6 +4,7 @@
   "type": "module",
   "private": true,
   "scripts": {
+    "start": "bun run src/index.ts",
     "dev": "bun run --watch src/index.ts",
     "build": "bun build src/index.ts --outdir dist --target node",
     "test": "bun test",
@@ -13,6 +14,7 @@
     "type-check": "tsc --noEmit"
   },
   "devDependencies": {
+    "@types/blessed": "^0.1.27",
     "@types/bun": "latest",
     "@types/node": "^25.5.2"
   },
@@ -20,6 +22,8 @@
     "typescript": "^5"
   },
   "dependencies": {
+    "blessed": "^0.1.81",
+    "blessed-contrib": "^4.11.0",
     "path": "^0.12.7"
   }
 }
