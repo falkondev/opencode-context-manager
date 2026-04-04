@@ -7,7 +7,7 @@
         "npx",
         "-y",
         "mcp-sqlite",
-        "/home/marlon/.local/share/opencode/opencode.db"
+        "~/.local/share/opencode/opencode.db"
       ]
     },
     "opencode Docs": {

@@ -121,6 +121,7 @@ export class SessionManager {
       const childSessions = childDbSessions.map((cs) => ({
         session: cs,
         messages: this.reader.getMessagesForSession(cs.id),
+        parts: this.reader.getPartsForSession(cs.id),
       }));
 
       const metrics = this.analyzer.analyze(session, messages, parts, childSessions);
