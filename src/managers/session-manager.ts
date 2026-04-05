@@ -71,7 +71,10 @@ export class SessionManager {
   public renameSession(sessionId: string, newTitle: string): boolean {
     let db: Database | null = null;
     try {
-      db = new Database(this.dbPath, { readonly: false, create: false });
+      // Note: { create: false } combined with { readonly: false } causes
+      // "bad parameter or other API misuse" on WAL databases already opened
+      // by another process. Opening without extra flags works correctly.
+      db = new Database(this.dbPath);
       const stmt = db.prepare("UPDATE session SET title = ? WHERE id = ?");
       stmt.run(newTitle, sessionId);
       logger.info("session-manager", `Session renamed: ${sessionId} → "${newTitle}"`);
