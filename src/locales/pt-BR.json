@@ -51,6 +51,11 @@
   "context.step_label": "Etapa",
   "context.peak_label": "turno de pico — composição do contexto",
   "context.subagents_hint": "ver detalhes dos subagentes",
+  "context.window_composition": "Composição da Janela (estimado)",
+  "context.system_tokens": "Sistema",
+  "context.conversation_tokens": "Conversação",
+  "context.buffer_tokens": "Buffer",
+  "context.free_tokens": "Livre",
 
   "tokens.total": "TOTAL",
   "tokens.billing_total": "Billing (todos os turnos)",
@@ -81,6 +86,8 @@
   "steps.avg_cache": "Eficiência média do cache",
   "steps.total_output": "Output total",
   "steps.no_steps": "Nenhuma etapa registrada para esta sessão.",
+  "steps.user_prompt": "Prompt",
+  "steps.model_agent": "Modelo · Agente",
 
   "tools.title": "Ferramentas",
   "tools.summary": "Agrupado por ferramenta",
@@ -128,6 +135,11 @@
   "keys.quit": "Sair",
   "keys.close": "Fechar",
   "keys.scroll": "Rolar",
+
+  "search.placeholder": "/ para buscar sessões",
+  "search.shortcut": "Buscar",
+  "search.clear": "Esc para limpar",
+  "search.no_results": "Nenhuma sessão corresponde à busca.",
 
   "settings.language": "Idioma",
   "settings.refresh_interval": "Intervalo de atualização (segundos)",

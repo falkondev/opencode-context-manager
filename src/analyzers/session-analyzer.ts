@@ -1,4 +1,4 @@
-import type { IDbSession, IMessage, IPart, IPartDataStepFinish, IPartDataTask, IPartDataTool } from "../models/session.ts";
+import type { IDbSession, IMessage, IPart, IPartDataStepFinish, IPartDataTask, IPartDataTool, IPartDataText } from "../models/session.ts";
 import {
   CONTEXT_LIMITS,
   DEFAULT_CONTEXT_LIMIT,
@@ -167,7 +167,7 @@ export class SessionAnalyzer {
     const timeline = this.buildTimeline(session, messages, parts);
 
     // ── New: per-step details ─────────────────────────────────────────────────
-    const steps = this.buildStepMetrics(assistantMessages, parts, peakContextLimit);
+    const steps = this.buildStepMetrics(assistantMessages, parts, peakContextLimit, userMessages);
 
     // ── New: tool details + aggregation ──────────────────────────────────────
     const toolsDetail = this.buildToolDetails(parts);
@@ -394,6 +394,7 @@ export class SessionAnalyzer {
     assistantMsgs: IMessage[],
     parts: IPart[],
     contextLimit: number,
+    userMessages: IMessage[] = [],
   ): IStepMetrics[] {
     const steps: IStepMetrics[] = [];
 
@@ -405,6 +406,9 @@ export class SessionAnalyzer {
       }
       partsByMessage.get(part.message_id)!.push(part);
     }
+
+    // Sort user messages by time for efficient preceding-message lookup
+    const sortedUserMsgs = [...userMessages].sort((a, b) => a.time_created - b.time_created);
 
     let prevTotal = 0;
     let stepNum = 0;
@@ -446,6 +450,7 @@ export class SessionAnalyzer {
 
       // Context window info
       const msgModelId = msg.data.modelID ?? "unknown";
+      const msgAgent = msg.data.agent ?? "unknown";
       const effectiveLimit = msgModelId !== "unknown"
         ? this.getContextLimit(msgModelId)
         : contextLimit;
@@ -466,11 +471,36 @@ export class SessionAnalyzer {
       // Tool details for this step
       const toolDetails = this.buildToolDetails(msgParts);
 
+      // Find the user prompt that triggered this step: last user message before this assistant
+      const assistantCreated = msg.data.time?.created ?? msg.time_created;
+      let precedingUserMsg: IMessage | undefined;
+      for (let j = sortedUserMsgs.length - 1; j >= 0; j--) {
+        if (sortedUserMsgs[j]!.time_created <= assistantCreated) {
+          precedingUserMsg = sortedUserMsgs[j];
+          break;
+        }
+      }
+
+      let userPrompt = "";
+      if (precedingUserMsg) {
+        const userParts = partsByMessage.get(precedingUserMsg.id) ?? [];
+        userPrompt = userParts
+          .filter((p) => p.data.type === "text")
+          .map((p) => (p.data as IPartDataText).text ?? "")
+          .join(" ")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 120);
+      }
+
       const step: IStepMetrics = {
         step_number: stepNum,
         message_id: msg.id,
         timestamp: created,
         duration_ms: durationMs,
+        model_id: msgModelId,
+        agent: msgAgent,
+        user_prompt: userPrompt,
         tokens: { total, input, output, reasoning, cache_read: cacheRead, cache_write: cacheWrite },
         context_limit: effectiveLimit,
         context_percentage: contextPct,

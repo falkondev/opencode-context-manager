@@ -51,6 +51,11 @@
   "context.step_label": "Step",
   "context.peak_label": "peak turn — context composition",
   "context.subagents_hint": "view subagent details",
+  "context.window_composition": "Window Composition (estimated)",
+  "context.system_tokens": "System",
+  "context.conversation_tokens": "Conversation",
+  "context.buffer_tokens": "Buffer",
+  "context.free_tokens": "Free",
 
   "tokens.total": "TOTAL",
   "tokens.billing_total": "Billing (all turns)",
@@ -81,6 +86,8 @@
   "steps.avg_cache": "Avg cache efficiency",
   "steps.total_output": "Total output",
   "steps.no_steps": "No steps recorded for this session.",
+  "steps.user_prompt": "Prompt",
+  "steps.model_agent": "Model · Agent",
 
   "tools.title": "Tools",
   "tools.summary": "Aggregated by tool",
@@ -128,6 +135,11 @@
   "keys.quit": "Quit",
   "keys.close": "Close",
   "keys.scroll": "Scroll",
+
+  "search.placeholder": "/ to search sessions",
+  "search.shortcut": "Search",
+  "search.clear": "Esc to clear",
+  "search.no_results": "No sessions match the search.",
 
   "settings.language": "Language",
   "settings.refresh_interval": "Refresh interval (seconds)",

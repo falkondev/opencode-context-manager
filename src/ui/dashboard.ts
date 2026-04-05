@@ -38,8 +38,7 @@ import {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const BAR_WIDTH = 24;
-const SESSION_LIST_WIDTH = "28%";
-const RIGHT_PANEL_WIDTH = "26%";
+const SESSION_LIST_WIDTH = "25%";
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 
@@ -48,9 +47,9 @@ export class Dashboard {
   private config: IAppConfig;
 
   // Panels
-  private sessionListBox!: Widgets.ListElement;
+  private sessionBox!: Widgets.BoxElement;
+  private searchBox!: Widgets.BoxElement;
   private contextBox!: Widgets.BoxElement;
-  private tokenBox!: Widgets.BoxElement;
   private timelineBox!: Widgets.BoxElement;
   private footerBox!: Widgets.BoxElement;
   private headerBox!: Widgets.BoxElement;
@@ -66,6 +65,7 @@ export class Dashboard {
 
   // State
   private summaries: ISessionSummary[] = [];
+  private filteredSummaries: ISessionSummary[] = [];
   private currentMetrics: ISessionMetrics | null = null;
   private selectedIndex = 0;
   private detailsVisible = false;
@@ -78,6 +78,10 @@ export class Dashboard {
   private onSelectSession: ((id: string) => void) | null = null;
   private onRefreshRequest: (() => void) | null = null;
   private onRenameSessionRequest: ((id: string, newTitle: string) => boolean) | null = null;
+
+  // Search state
+  private searchActive = false;
+  private searchQuery = "";
 
   constructor(config: IAppConfig) {
     this.config = config;
@@ -111,10 +115,10 @@ export class Dashboard {
   public update(summaries: ISessionSummary[], current: ISessionMetrics | null): void {
     this.summaries = summaries;
     this.currentMetrics = current;
+    this.applyFilter();
 
-    this.renderSessionList();
+    this.renderSessionArea();
     this.renderContextPanel();
-    this.renderTokenPanel();
     this.renderTimeline();
     this.renderHeader();
 
@@ -149,39 +153,56 @@ export class Dashboard {
       width: "100%",
       height: 3,
       tags: true,
-      style: { fg: COLORS.header, bg: "black", bold: true },
+      style: { fg: COLORS.header, bg: "#000000", bold: true },
     });
 
-    // Session list (left)
-    this.sessionListBox = blessed.list({
+    // Search bar (above session list)
+    this.searchBox = blessed.box({
       top: 3,
       left: 0,
       width: SESSION_LIST_WIDTH,
-      height: "75%-3",
+      height: 3,
+      tags: true,
+      border: { type: "line" },
+      style: {
+        border: { fg: COLORS.border },
+        fg: "white",
+        bg: "#000000",
+      },
+    });
+
+    // Session list (left) — custom rendered box with 2 lines per session
+    this.sessionBox = blessed.box({
+      top: 6,
+      left: 0,
+      width: SESSION_LIST_WIDTH,
+      height: "75%-6",
       label: ` ${t("panel.sessions")} `,
       tags: true,
       border: { type: "line" },
+      scrollable: true,
+      alwaysScroll: true,
+      wrap: false,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       scrollbar: { ch: "│" } as any,
       mouse: true,
       keys: true,
-      vi: false,
       style: {
         border: { fg: COLORS.border },
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         label: { fg: COLORS.title } as any,
-        selected: { bg: COLORS.bgSelected, fg: COLORS.fgSelected },
-        item: { fg: "white" },
+        fg: "white",
+        bg: "#000000",
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         scrollbar: { bg: COLORS.border } as any,
       },
     });
 
-    // Context panel (center)
+    // Context panel — occupies remaining 75% width
     this.contextBox = blessed.box({
       top: 3,
       left: SESSION_LIST_WIDTH,
-      width: `${100 - 28 - 26}%`,
+      width: `${100 - 25}%`,
       height: "75%-3",
       label: ` ${t("panel.context")} `,
       tags: true,
@@ -194,26 +215,7 @@ export class Dashboard {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         label: { fg: COLORS.title, bold: true } as any,
         fg: "white",
-      },
-    });
-
-    // Token breakdown (right)
-    this.tokenBox = blessed.box({
-      top: 3,
-      left: `${28 + (100 - 28 - 26)}%`,
-      width: RIGHT_PANEL_WIDTH,
-      height: "75%-3",
-      label: ` ${t("panel.composition")} `,
-      tags: true,
-      border: { type: "line" },
-      scrollable: true,
-      alwaysScroll: true,
-      mouse: true,
-      style: {
-        border: { fg: COLORS.border },
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        label: { fg: COLORS.title, bold: true } as any,
-        fg: "white",
+        bg: "#000000",
       },
     });
 
@@ -236,6 +238,7 @@ export class Dashboard {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         label: { fg: COLORS.title } as any,
         fg: "white",
+        bg: "#000000",
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         scrollbar: { bg: COLORS.border } as any,
       },
@@ -248,18 +251,19 @@ export class Dashboard {
       width: "100%",
       height: 3,
       tags: true,
-      style: { fg: COLORS.footerText, bg: "black" },
+      style: { fg: COLORS.footerText, bg: "#000000" },
     });
 
     this.screen.append(this.headerBox);
-    this.screen.append(this.sessionListBox);
+    this.screen.append(this.searchBox);
+    this.screen.append(this.sessionBox);
     this.screen.append(this.contextBox);
-    this.screen.append(this.tokenBox);
     this.screen.append(this.timelineBox);
     this.screen.append(this.footerBox);
 
+    this.renderSearchBox();
     this.renderFooter();
-    this.sessionListBox.focus();
+    this.sessionBox.focus();
   }
 
   private buildOverlays(): void {
@@ -268,6 +272,7 @@ export class Dashboard {
       border: { type: "line" as const },
       scrollable: true,
       alwaysScroll: true,
+      wrap: false,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       scrollbar: { ch: "│" } as any,
       keys: true,
@@ -278,7 +283,7 @@ export class Dashboard {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         label: { fg: "white" } as any,
         fg: "white",
-        bg: "black",
+        bg: "#000000",
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         scrollbar: { bg: "gray" } as any,
       },
@@ -341,7 +346,7 @@ export class Dashboard {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         label: { fg: COLORS.title, bold: true } as any,
         fg: "white",
-        bg: "black",
+        bg: "#000000",
       },
     });
 
@@ -368,7 +373,7 @@ export class Dashboard {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         label: { fg: COLORS.header, bold: true } as any,
         fg: "white",
-        bg: "black",
+        bg: "#000000",
       },
     });
 
@@ -386,7 +391,7 @@ export class Dashboard {
       style: {
         border: { fg: COLORS.border },
         fg: "white",
-        bg: "black",
+        bg: "#000000",
         focus: { border: { fg: COLORS.header } },
       },
     });
@@ -399,66 +404,88 @@ export class Dashboard {
   private bindKeys(): void {
     // Quit
     this.screen.key(["q", "Q", "C-c"], () => {
+      if (this.searchActive) return;
       this.destroy();
       process.exit(0);
     });
 
     // Refresh
     this.screen.key(["r", "R"], () => {
+      if (this.searchActive) return;
       this.onRefreshRequest?.();
     });
 
     // Technical details toggle
     this.screen.key(["d", "D"], () => {
+      if (this.searchActive) return;
       this.closeAllOverlays();
       this.toggleDetails();
     });
 
     // Settings toggle
     this.screen.key(["c", "C"], () => {
+      if (this.searchActive) return;
       this.closeAllOverlays();
       this.toggleSettings();
     });
 
     // Steps overlay toggle
     this.screen.key(["s", "S"], () => {
+      if (this.searchActive) return;
       this.closeAllOverlays();
       this.toggleSteps();
     });
 
     // Tools overlay toggle
     this.screen.key(["t", "T"], () => {
+      if (this.searchActive) return;
       this.closeAllOverlays();
       this.toggleTools();
     });
 
     // Subagents overlay toggle
     this.screen.key(["a", "A"], () => {
+      if (this.searchActive) return;
       this.closeAllOverlays();
       this.toggleSubagent();
     });
 
     // Rename session (N key)
     this.screen.key(["n", "N"], () => {
+      if (this.searchActive) return;
       if (this.anyOverlayVisible()) return;
       this.openRename();
     });
 
-    // Navigate sessions — bind keys on the list widget (not on screen) to avoid
-    // double-move. With vi:true, blessed.list also handles up/down/j/k internally
-    // which would cause two moves per keypress if we also bound them on screen.
-    this.sessionListBox.key(["up", "k"], () => {
+    // Activate search with "/"
+    this.screen.key(["/"], () => {
+      if (this.anyOverlayVisible()) return;
+      this.activateSearch();
+    });
+
+    // Navigate sessions — bind keys on the session box
+    this.sessionBox.key(["up", "k"], () => {
       if (this.anyOverlayVisible()) return;
       this.navigateSession(-1);
     });
-    this.sessionListBox.key(["down", "j"], () => {
+    this.sessionBox.key(["down", "j"], () => {
       if (this.anyOverlayVisible()) return;
       this.navigateSession(1);
     });
 
-    // Session list mouse click / Enter
-    this.sessionListBox.on("select", (_el, index) => {
-      this.selectSessionAt(index);
+    // Session box mouse click
+    this.sessionBox.on("click", (data) => {
+      if (this.anyOverlayVisible()) return;
+      // Each session takes 2 lines; offset 1 for the border
+      const relY = data.y - (this.sessionBox as unknown as { atop: number }).atop - 1;
+      const clickedIndex = Math.floor(relY / 2);
+      if (clickedIndex >= 0 && clickedIndex < this.filteredSummaries.length) {
+        this.selectedIndex = clickedIndex;
+        const s = this.filteredSummaries[clickedIndex];
+        if (s) this.onSelectSession?.(s.id);
+        this.renderSessionArea();
+        this.screen.render();
+      }
     });
 
     // Close overlays with Escape / q / respective key
@@ -495,25 +522,102 @@ export class Dashboard {
     });
   }
 
+  // ─── Search ────────────────────────────────────────────────────────────────
+
+  private activateSearch(): void {
+    this.searchActive = true;
+    this.renderSearchBox();
+    this.screen.render();
+
+    // Capture raw keypresses while search is active
+    const onKeypress = (_ch: string | undefined, key: { name: string; sequence: string }) => {
+      if (!this.searchActive) return;
+
+      if (key.name === "escape") {
+        this.searchQuery = "";
+        this.searchActive = false;
+        this.applyFilter();
+        this.renderSearchBox();
+        this.renderSessionArea();
+        this.screen.render();
+        this.screen.removeListener("keypress", onKeypress);
+        return;
+      }
+
+      if (key.name === "enter" || key.name === "return") {
+        this.searchActive = false;
+        this.renderSearchBox();
+        this.screen.render();
+        this.screen.removeListener("keypress", onKeypress);
+        return;
+      }
+
+      if (key.name === "backspace") {
+        this.searchQuery = this.searchQuery.slice(0, -1);
+      } else if (key.sequence && key.sequence.length === 1 && key.sequence >= " ") {
+        this.searchQuery += key.sequence;
+      }
+
+      this.applyFilter();
+      this.renderSearchBox();
+      this.renderSessionArea();
+      this.screen.render();
+    };
+
+    this.screen.on("keypress", onKeypress);
+  }
+
+  private applyFilter(): void {
+    if (!this.searchQuery) {
+      this.filteredSummaries = [...this.summaries];
+    } else {
+      const q = this.searchQuery.toLowerCase();
+      this.filteredSummaries = this.summaries.filter((s) =>
+        s.title.toLowerCase().includes(q) ||
+        s.directory.toLowerCase().includes(q) ||
+        s.model_id.toLowerCase().includes(q),
+      );
+    }
+
+    // Clamp selectedIndex
+    if (this.selectedIndex >= this.filteredSummaries.length) {
+      this.selectedIndex = Math.max(0, this.filteredSummaries.length - 1);
+    }
+  }
+
+  private renderSearchBox(): void {
+    const borderColor = this.searchActive ? COLORS.header : COLORS.border;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (this.searchBox.style as any).border = { fg: borderColor };
+
+    if (this.searchActive) {
+      const cursor = fg(COLORS.header, "█");
+      const query = this.searchQuery
+        ? fgBold("white", this.searchQuery)
+        : fg(COLORS.muted, t("search.placeholder"));
+      this.searchBox.setContent(` ${fg(COLORS.keyHint, "/")} ${query}${cursor}`);
+    } else if (this.searchQuery) {
+      this.searchBox.setContent(
+        ` ${fg(COLORS.keyHint, "/")} ${fgBold("white", this.searchQuery)}` +
+        `  ${fg(COLORS.muted, t("search.clear"))}`,
+      );
+    } else {
+      this.searchBox.setContent(` ${fg(COLORS.muted, t("search.placeholder"))}`);
+    }
+  }
+
   // ─── Navigation ────────────────────────────────────────────────────────────
 
   private navigateSession(delta: number): void {
-    if (this.summaries.length === 0) return;
+    if (this.filteredSummaries.length === 0) return;
     this.selectedIndex = Math.max(
       0,
-      Math.min(this.summaries.length - 1, this.selectedIndex + delta),
+      Math.min(this.filteredSummaries.length - 1, this.selectedIndex + delta),
     );
-    this.sessionListBox.select(this.selectedIndex);
-    const s = this.summaries[this.selectedIndex];
+    const s = this.filteredSummaries[this.selectedIndex];
     if (s) this.onSelectSession?.(s.id);
+    this.renderSessionArea();
     this.screen.render();
-  }
-
-  private selectSessionAt(index: number): void {
-    if (index < 0 || index >= this.summaries.length) return;
-    this.selectedIndex = index;
-    const s = this.summaries[index];
-    if (s) this.onSelectSession?.(s.id);
   }
 
   // ─── Overlay Management ────────────────────────────────────────────────────
@@ -554,7 +658,7 @@ export class Dashboard {
   private hideDetails(): void {
     this.detailsVisible = false;
     this.detailsOverlay.hide();
-    this.sessionListBox.focus();
+    this.sessionBox.focus();
     this.screen.render();
   }
 
@@ -574,7 +678,7 @@ export class Dashboard {
   private hideSteps(): void {
     this.stepsVisible = false;
     this.stepsOverlay.hide();
-    this.sessionListBox.focus();
+    this.sessionBox.focus();
     this.screen.render();
   }
 
@@ -597,7 +701,7 @@ export class Dashboard {
   private hideTools(): void {
     this.toolsVisible = false;
     this.toolsOverlay.hide();
-    this.sessionListBox.focus();
+    this.sessionBox.focus();
     this.screen.render();
   }
 
@@ -622,7 +726,7 @@ export class Dashboard {
   private hideSubagent(): void {
     this.subagentVisible = false;
     this.subagentOverlay.hide();
-    this.sessionListBox.focus();
+    this.sessionBox.focus();
     this.screen.render();
   }
 
@@ -654,14 +758,14 @@ export class Dashboard {
   private hideSettings(): void {
     this.settingsVisible = false;
     this.settingsOverlay.hide();
-    this.sessionListBox.focus();
+    this.sessionBox.focus();
     this.screen.render();
   }
 
   // ─── Rename Overlay ─────────────────────────────────────────────────────────
 
   private openRename(): void {
-    const s = this.summaries[this.selectedIndex];
+    const s = this.filteredSummaries[this.selectedIndex];
     if (!s) return;
 
     this.renameVisible = true;
@@ -700,11 +804,9 @@ export class Dashboard {
   private closeRename(): void {
     this.renameVisible = false;
     this.renameOverlay.hide();
-    this.sessionListBox.focus();
+    this.sessionBox.focus();
     this.screen.render();
   }
-
-
 
   private renderHeader(): void {
     const m = this.currentMetrics;
@@ -723,20 +825,70 @@ export class Dashboard {
     this.headerBox.setContent(`${line1}\n${line2}`);
   }
 
-  private renderSessionList(): void {
-    const items = this.summaries.map((s) => {
-      const liveTag = s.is_live ? fg(COLORS.live, "⬤ ") : "  ";
-      const title = truncate(s.title, 20);
-      const model = truncate(shortModelId(s.model_id), 12);
-      const pct = s.has_data ? fg(gaugeColor(s.context_percentage), `${s.context_percentage}%`) : "";
-      const tokens = s.has_data ? fg(COLORS.muted, fmtTokens(s.total_tokens, true)) : fg(COLORS.muted, "—");
-      const age = fg(COLORS.muted, fmtTimeAgo(s.time_created));
+  // ─── Session Area (search + custom list) ──────────────────────────────────
 
-      return `${liveTag}${title}  ${fg(COLORS.muted, model)}  ${pct} ${tokens}  ${age}`;
+  private renderSessionArea(): void {
+    this.renderSearchBox();
+    this.renderSessionList();
+  }
+
+  private renderSessionList(): void {
+    if (this.filteredSummaries.length === 0) {
+      const msg = this.searchQuery
+        ? fg(COLORS.muted, t("search.no_results"))
+        : fg(COLORS.muted, t("app.no_sessions"));
+      this.sessionBox.setContent(`\n  ${msg}`);
+      return;
+    }
+
+    // Inner width of the box (subtract 2 for the borders)
+    const boxWidth = Math.max(10, Math.floor((this.screen.width as number) * 0.25) - 2);
+
+    const lines: string[] = [];
+
+    this.filteredSummaries.forEach((s, i) => {
+      const isSelected = i === this.selectedIndex;
+      const liveIcon = s.is_live ? fg(COLORS.live, "⬤") : fg(COLORS.muted, "·");
+
+      // Pct label
+      const pctStr = s.has_data
+        ? fg(gaugeColor(s.context_percentage), `${s.context_percentage}%`)
+        : fg(COLORS.muted, "—");
+
+      // Title — truncate so title + space + pct fits in boxWidth
+      const pctRaw = s.has_data ? `${s.context_percentage}%` : "—";
+      const titleMaxLen = boxWidth - pctRaw.length - 5; // 1 space + 1 liveIcon + 1 space + 2 spaces before pct
+      const titleStr = truncate(s.title, Math.max(6, titleMaxLen));
+
+      // Model + tokens + age — second line
+      const modelStr = truncate(shortModelId(s.model_id), 10);
+      const tokensStr = s.has_data ? fmtTokens(s.total_tokens, true) : "—";
+      const ageStr = fmtTimeAgo(s.time_created);
+
+      // Build lines with optional blue-bg tag for selection
+      if (isSelected) {
+        // Compute plain-text lengths (without blessed tags) so we can pad to boxWidth
+        const plain1 = ` * ${titleStr}  ${pctRaw}`;
+        const plain2 = `   ${modelStr}  ${tokensStr}  ${ageStr}`;
+        const fill1 = " ".repeat(Math.max(0, boxWidth - plain1.length));
+        const fill2 = " ".repeat(Math.max(0, boxWidth - plain2.length));
+        const line1 = `{blue-bg} ${liveIcon} ${fgBold("white", titleStr)}  ${pctStr}${fill1}{/blue-bg}`;
+        const line2 = `{blue-bg}   ${fg(COLORS.muted, modelStr)}  ${fg(COLORS.muted, tokensStr)}  ${fg(COLORS.muted, ageStr)}${fill2}{/blue-bg}`;
+        lines.push(line1);
+        lines.push(line2);
+      } else {
+        const line1 = ` ${liveIcon} ${fg("white", titleStr)}  ${pctStr}`;
+        const line2 = `   ${fg(COLORS.muted, modelStr)}  ${fg(COLORS.muted, tokensStr)}  ${fg(COLORS.muted, ageStr)}`;
+        lines.push(line1);
+        lines.push(line2);
+      }
     });
 
-    this.sessionListBox.setItems(items as string[]);
-    this.sessionListBox.select(this.selectedIndex);
+    this.sessionBox.setContent(lines.join("\n"));
+
+    // Scroll to show selected item (2 lines per item)
+    const scrollTarget = this.selectedIndex * 2;
+    this.sessionBox.scrollTo(scrollTarget);
   }
 
   private renderContextPanel(): void {
@@ -748,114 +900,110 @@ export class Dashboard {
 
     const lines: string[] = [];
 
-    // Session identity
+    // ── Session identity ───────────────────────────────────────────────────
     lines.push("");
-    lines.push(`  ${fgBold(COLORS.header, truncate(m.session.title, 40))}`);
+    lines.push(`  ${fgBold(COLORS.header, truncate(m.session.title, 50))}`);
     lines.push(`  ${fg(COLORS.muted, shortDir(m.session.directory))}`);
     lines.push("");
 
-    // Model / provider row
+    // Model / agent / finish row
     lines.push(
       `  ${fg(COLORS.muted, t("session.model") + ":")}  ` +
       fgBold("white", shortModelId(m.model_id)) +
-      `  ${fg(COLORS.muted, m.provider_id)}`,
-    );
-    lines.push(
-      `  ${fg(COLORS.muted, t("session.agent") + ":")}   ` +
+      `  ${fg(COLORS.muted, t("session.agent") + ":")} ` +
       fg("cyan", m.agent) +
-      `   ${fg(COLORS.muted, t("session.finish") + ":")} ` +
+      `  ${fg(COLORS.muted, t("session.finish") + ":")} ` +
       fg(m.finish_reason === "stop" ? "green" : "yellow", m.finish_reason),
     );
     lines.push("");
 
-    // ── Current context window (last step) ─────────────────────────────────
+    // ── Context Window ─────────────────────────────────────────────────────
+    lines.push(`  ${fgBold(COLORS.header, "── " + t("context.current_window") + " ──")}`);
+
     const lastPct = m.last_step_context_percentage;
     const lastTokens = m.last_step_tokens;
     const lastColor = gaugeColor(lastPct);
-    const stepNum = m.step_count;
+    const freeTokens = m.context_limit - lastTokens.total;
 
-    lines.push(`  ${fgBold(COLORS.header, t("context.current_window"))}`);
-    if (stepNum > 0) {
-      lines.push(`  ${fg(COLORS.muted, t("context.step_label"))} ${fgBold("white", `${stepNum}/${stepNum}`)}`);
-    }
-    const lastBar = asciiBar(lastPct, BAR_WIDTH, lastColor, "black");
+    const lastBar = asciiBar(lastPct, BAR_WIDTH, lastColor, "#000000");
     const lastPctLabel = fgBold(lastColor, `${lastPct}%`);
-    lines.push(`  ${lastBar}  ${lastPctLabel}`);
     lines.push(
-      `  ${fg(COLORS.muted, fmtTokens(lastTokens.total) + " / " + fmtTokens(m.context_limit))}` +
-      `  ${fg(COLORS.muted, fmtTokens(m.context_limit - lastTokens.total) + " " + t("misc.free"))}`,
+      `  ${lastBar}  ${lastPctLabel}  ${fg(COLORS.muted, "|")}  ` +
+      `${fg(COLORS.muted, fmtTokens(lastTokens.total) + " / " + fmtTokens(m.context_limit))}  ${fg(COLORS.muted, "|")}  ` +
+      `${fg(COLORS.muted, fmtTokens(freeTokens) + " " + t("misc.free"))}`,
     );
     lines.push("");
 
-    // Token breakdown for the last step
-    const lastTotal = lastTokens.total;
-    const renderBar = (label: string, pctVal: number, count: number, color: string) => {
-      const bar = asciiBar(pctVal, BAR_WIDTH, color, "black");
-      const pctStr = fg(color, pad(fmtPercent(pctVal), 7, true));
-      const cnt = fg(COLORS.muted, fmtTokens(count));
-      return `  ${pad(label, 10)} ${bar}  ${pctStr}  ${cnt}`;
-    };
+    // ── Billing (all steps) ────────────────────────────────────────────────
+    const stepNum = m.step_count;
+    lines.push(
+      `  ${fgBold(COLORS.header, "── " + t("billing.all_steps") + " ──")}` +
+      `  ${fg(COLORS.muted, `(${stepNum} ${t("billing.steps_label")})`)}`,
+    );
 
-    const inputPct = lastTotal > 0 ? (lastTokens.input / lastTotal) * 100 : 0;
-    const outputPct = lastTotal > 0 ? (lastTokens.output / lastTotal) * 100 : 0;
-    const cachePct = lastTotal > 0 ? (lastTokens.cache_read / lastTotal) * 100 : 0;
-    const reasoningPct = lastTotal > 0 ? (lastTokens.reasoning / lastTotal) * 100 : 0;
-
-    lines.push(renderBar(t("tokens.input"), inputPct, lastTokens.input, COLORS.tokenInput));
-    if (lastTokens.cache_read > 0) {
-      lines.push(renderBar(t("tokens.cache_read"), cachePct, lastTokens.cache_read, COLORS.tokenCache));
-    }
-    lines.push(renderBar(t("tokens.output"), outputPct, lastTokens.output, COLORS.tokenOutput));
-    if (lastTokens.reasoning > 0) {
-      lines.push(renderBar(t("tokens.reasoning"), reasoningPct, lastTokens.reasoning, COLORS.tokenReasoning));
-    }
-    lines.push("");
-
-    // ── Billing summary (all steps) ─────────────────────────────────────────
-    lines.push(`  ${fgBold(COLORS.header, t("billing.all_steps"))}  ${fg(COLORS.muted, `(${stepNum} ${t("billing.steps_label")})`)}`);;
-    lines.push("");
-
-    // Fresh input vs cache reused (the key distinction)
     const efficiencyColor =
       m.overall_cache_efficiency >= 80 ? "green" :
       m.overall_cache_efficiency >= 50 ? "yellow" : "red";
 
     lines.push(
-      `  ${fg(COLORS.muted, t("billing.fresh_input") + ":")}  ` +
-      fgBold(COLORS.tokenInput, fmtTokens(m.total_fresh_input)) +
-      `  ${fg(COLORS.muted, t("billing.real_cost"))}`,
+      `  ${fg(COLORS.muted, t("billing.fresh_input") + ":")}    ` +
+      fgBold(COLORS.tokenInput, fmtTokens(m.total_fresh_input)),
     );
     lines.push(
-      `  ${fg(COLORS.muted, t("billing.cache_reused") + ":")} ` +
-      fgBold(COLORS.tokenCache, fmtTokens(m.total_cache_reused)) +
-      `  ${fg(COLORS.muted, t("billing.reused_free"))}`,
+      `  ${fg(COLORS.muted, t("billing.cache_reused") + ":")}   ` +
+      fgBold(COLORS.tokenCache, fmtTokens(m.total_cache_reused)),
+    );
+    lines.push(
+      `  ${fg(COLORS.muted, t("billing.total_output") + ":")}    ` +
+      fg(COLORS.tokenOutput, fmtTokens(m.tokens.output)),
     );
     lines.push(
       `  ${fg(COLORS.muted, t("billing.cache_efficiency") + ":")} ` +
       fgBold(efficiencyColor, fmtPercent(m.overall_cache_efficiency)),
     );
+    lines.push("");
+
+    // ── Window Composition (estimated) ────────────────────────────────────
+    const comp = m.token_composition;
+    const systemTokens = comp.system_prompt_tokens;
+    // Conversation = cache_read of last step (what the model "saw" from history)
+    const convTokens = lastTokens.cache_read;
+    // Buffer = auto-context injected files
+    const bufferTokens = comp.auto_context_tokens;
+
+    lines.push(`  ${fgBold(COLORS.header, "── " + t("context.window_composition") + " ──")}`);
     lines.push(
-      `  ${fg(COLORS.muted, t("billing.total_output") + ":")}  ` +
-      fg(COLORS.tokenOutput, fmtTokens(m.tokens.output)),
+      `  ${fg(COLORS.muted, t("context.system_tokens") + ":")}       ` +
+      fg("yellow", fmtTokens(systemTokens)),
+    );
+    lines.push(
+      `  ${fg(COLORS.muted, t("context.conversation_tokens") + ":")} ` +
+      fg(COLORS.compConversation ?? "cyan", fmtTokens(convTokens)),
+    );
+    lines.push(
+      `  ${fg(COLORS.muted, t("context.buffer_tokens") + ":")}       ` +
+      fg(COLORS.compAutoContext, fmtTokens(bufferTokens)),
+    );
+    lines.push(
+      `  ${fg(COLORS.muted, t("context.free_tokens") + ":")}         ` +
+      fg("green", fmtTokens(freeTokens)),
     );
     lines.push("");
 
-    // Timing
-    lines.push(`  ${fg(COLORS.muted, t("session.duration") + ":")}  ` +
-      fgBold("white", fmtDuration(m.duration_total_ms)) +
-      `  ${fg(COLORS.muted, "(model: " + fmtDuration(m.duration_model_ms) + ")")}`);
-
-    // Cost
-    lines.push(`  ${fg(COLORS.muted, t("session.cost") + ":")}      ` +
-      fg(m.cost === 0 ? "green" : "white", fmtCost(m.cost)));
-
-    // Steps / tool calls with shortcut hints
+    // ── Cost ──────────────────────────────────────────────────────────────
+    lines.push(`  ${fgBold(COLORS.header, "── " + t("session.cost") + " ──")}`);
+    lines.push(
+      `  ${fg(m.cost === 0 ? "green" : "white", fmtCost(m.cost))}`,
+    );
     lines.push("");
+
+    // ── Steps & Actions ────────────────────────────────────────────────────
+    lines.push(`  ${fgBold(COLORS.header, "── " + t("steps.title") + " & Actions ──")}`);
     lines.push(
       `  ${fg(COLORS.muted, t("session.steps") + ":")}  ` +
       fg("cyan", `${m.step_count}`) +
       `  ${fg(COLORS.keyHint, "[S]")}` +
-      `  ${fg(COLORS.muted, t("session.tool_calls") + ":")} ` +
+      `   ${fg(COLORS.muted, t("session.tool_calls") + ":")} ` +
       fg("cyan", `${m.tool_calls_count}`) +
       `  ${fg(COLORS.keyHint, "[T]")}`,
     );
@@ -868,93 +1016,11 @@ export class Dashboard {
       );
     }
 
-    this.contextBox.setContent(lines.join("\n"));
-  }
-
-  private renderTokenPanel(): void {
-    const m = this.currentMetrics;
-    if (!m) {
-      this.tokenBox.setContent(`\n  ${fg(COLORS.muted, t("session.no_data"))}`);
-      return;
-    }
-
-    const lines: string[] = [];
-    const comp = m.token_composition;
-    const limit = m.context_limit;
-    const peak = m.peak_turn_tokens;
-
-    // ── Header ─────────────────────────────────────────────────────────────
-    lines.push("");
-    lines.push(`  ${fgBold(COLORS.header, t("context.header"))}`);
     lines.push(
-      `  ${fgBold("white", shortModelId(m.model_id))} · ` +
-      `${fg("white", fmtTokens(m.peak_context_tokens, true))}/${fmtTokens(limit, true)} ` +
-      `(${fg(gaugeColor(m.context_percentage), `${m.context_percentage}%`)})`,
+      `  ${fg(COLORS.keyHint, "[D]")} ${fg(COLORS.muted, t("keys.details"))}`,
     );
-    lines.push(`  ${fg(COLORS.muted, t("context.peak_label"))}`);
-    lines.push("");
 
-    // ── Peak context window breakdown ───────────────────────────────────────
-    const newInputPct = limit > 0 ? (peak.input       / limit) * 100 : 0;
-    const convPct     = limit > 0 ? (peak.cache_read   / limit) * 100 : 0;
-    const outputPct   = limit > 0 ? (peak.output       / limit) * 100 : 0;
-    const freePct     = limit > 0 ? Math.max(0, ((limit - m.peak_context_tokens) / limit) * 100) : 100;
-
-    const BAR = 16;
-
-    const renderRow = (
-      symbol: string,
-      label: string,
-      pctVal: number,
-      tokenCount: number,
-      color: string,
-    ) => {
-      const bar    = asciiBar(pctVal, BAR, color, "black");
-      const pctStr = fg(color, pad(fmtPercent(pctVal), 7, true));
-      const cnt    = fg(COLORS.muted, fmtTokens(tokenCount, true) + " tokens");
-      return `  ${fg(color, symbol)} ${pad(truncate(label, 14), 14)} ${bar} ${pctStr} ${cnt}`;
-    };
-
-    lines.push(renderRow("■", t("context.new_input"),    newInputPct, peak.input,                        COLORS.compUserText));
-    if (peak.cache_read > 0) {
-      lines.push(renderRow("■", t("context.conversation"), convPct,    peak.cache_read,                    COLORS.compConversation));
-    }
-    if (peak.output > 0) {
-      lines.push(renderRow("■", t("tokens.output"),        outputPct,  peak.output,                        COLORS.tokenOutput));
-    }
-    lines.push(renderRow("░", t("context.free_space"),    freePct,    limit - m.peak_context_tokens, COLORS.compFreeSpace));
-
-    // ── Initial input composition estimate ──────────────────────────────────
-    const hasComposition =
-      comp.system_prompt_tokens > 0 ||
-      comp.auto_context_tokens > 0 ||
-      comp.user_text_tokens > 0;
-
-    if (hasComposition) {
-      lines.push("");
-      lines.push(`  ${fg(COLORS.muted, t("context.initial_composition"))}`);
-
-      const coldTotal = comp.system_prompt_tokens + comp.auto_context_tokens + comp.user_text_tokens;
-      const renderSubRow = (label: string, count: number, color: string) => {
-        const subPct = coldTotal > 0 ? (count / coldTotal) * 100 : 0;
-        const bar    = asciiBar(subPct, BAR, color, "black");
-        const pctStr = fg(color, pad(fmtPercent(subPct), 7, true));
-        const cnt    = fg(COLORS.muted, fmtTokens(count, true) + " tokens");
-        return `  ${fg(COLORS.muted, "·")} ${pad(truncate(label, 14), 14)} ${bar} ${pctStr} ${cnt}`;
-      };
-
-      if (comp.system_prompt_tokens > 0) {
-        lines.push(renderSubRow(t("context.system_prompt"), comp.system_prompt_tokens, "yellow"));
-      }
-      if (comp.auto_context_tokens > 0) {
-        lines.push(renderSubRow(t("context.auto_context"), comp.auto_context_tokens, COLORS.compAutoContext));
-      }
-      if (comp.user_text_tokens > 0) {
-        lines.push(renderSubRow(t("context.user_messages"), comp.user_text_tokens, COLORS.compUserText));
-      }
-    }
-
-    // ── Auto-context warning ────────────────────────────────────────────────
+    // Injected diffs warning
     if (m.injected_diffs_count > 0) {
       lines.push("");
       lines.push(
@@ -963,50 +1029,7 @@ export class Dashboard {
       );
     }
 
-    // ── Subagents section ───────────────────────────────────────────────────
-    if (m.subagents.length > 0) {
-      lines.push("");
-      lines.push(
-        `  ${fgBold(COLORS.header, t("context.subagents"))}` +
-        `  ${fg(COLORS.muted, `${m.subagents.length} ${t("context.tasks")}`)}`
-      );
-
-      m.subagents.forEach((sub, i) => {
-        const isLast   = i === m.subagents.length - 1;
-        const branch   = isLast ? "└" : "├";
-        const agentColor =
-          sub.agent_type === "explore" ? COLORS.subagentExplore :
-          sub.agent_type === "general" ? COLORS.subagentGeneral :
-          COLORS.subagentDefault;
-
-        const subPct    = fg(gaugeColor(sub.context_percentage), `${sub.context_percentage}%`);
-        const subTokens = fg(COLORS.muted, fmtTokens(sub.peak_tokens, true));
-        const dur       = sub.duration_ms > 0 ? fg(COLORS.muted, ` ${fmtDuration(sub.duration_ms)}`) : "";
-        const desc      = truncate(sub.description, 16);
-
-        lines.push(
-          `  ${fg(COLORS.muted, branch)} ${fg(agentColor, "@" + sub.agent_type)}` +
-          `  ${fg("white", desc)}` +
-          `  ${subTokens} ${subPct}${dur}`
-        );
-      });
-
-      if (m.subagent_details.length > 0) {
-        lines.push(`  ${fg(COLORS.keyHint, "[A]")} ${fg(COLORS.muted, t("context.subagents_hint"))}`);
-      }
-    }
-
-    // ── Session metadata ────────────────────────────────────────────────────
-    lines.push("");
-    lines.push(`  ${fg(COLORS.muted, "─".repeat(22))}`);
-    lines.push(`  ${fg(COLORS.muted, "Created")}  ${fg("white", fmtTimestamp(m.session.time_created))}`);
-    lines.push(`  ${fg(COLORS.muted, "Updated")}  ${fg("white", fmtTimeAgo(m.session.time_updated))}`);
-    lines.push(
-      `  ${fg(COLORS.muted, "Files \u0394")}  ${fg("cyan", `+${m.session.summary_additions ?? 0}`)}` +
-      `  ${fg("magenta", `-${m.session.summary_deletions ?? 0}`)}`,
-    );
-
-    this.tokenBox.setContent(lines.join("\n"));
+    this.contextBox.setContent(lines.join("\n"));
   }
 
   private renderTimeline(): void {
@@ -1119,9 +1142,26 @@ export class Dashboard {
         `  ${fg(COLORS.muted, "finish:")} ${fg(finColor, step.finish_reason)}`,
       );
 
+      // Model and agent for this step
+      if (step.model_id || step.agent) {
+        lines.push(
+          `  ${fg(COLORS.muted, t("steps.model_agent") + ":")}` +
+          ` ${fg("white", shortModelId(step.model_id))}` +
+          `  ${fg(COLORS.muted, "·")}  ${fg("cyan", step.agent)}`,
+        );
+      }
+
+      // User prompt that triggered this step
+      if (step.user_prompt) {
+        lines.push(
+          `  ${fg(COLORS.muted, t("steps.user_prompt") + ":")} ` +
+          fg(COLORS.muted, truncate(step.user_prompt, 100)),
+        );
+      }
+
       // Context window bar for this step
       const ctxColor = gaugeColor(step.context_percentage);
-      const ctxBar = asciiBar(step.context_percentage, 20, ctxColor, "black");
+      const ctxBar = asciiBar(step.context_percentage, 20, ctxColor, "#000000");
       lines.push(
         `  ${ctxBar} ${fgBold(ctxColor, `${step.context_percentage}%`)}` +
         `  ${fg(COLORS.muted, fmtTokens(step.tokens.total) + " / " + fmtTokens(step.context_limit))}`,
@@ -1143,7 +1183,7 @@ export class Dashboard {
 
       if (t_.cache_read > 0 || !isColdStart) {
         const effColor = step.cache_efficiency >= 80 ? "green" : step.cache_efficiency >= 50 ? "yellow" : "red";
-        const effBar = asciiBar(step.cache_efficiency, 16, effColor, "black");
+        const effBar = asciiBar(step.cache_efficiency, 16, effColor, "#000000");
         lines.push(
           `  ${fg(COLORS.tokenCache, "▪")} ${fg(COLORS.muted, t("tokens.cache_read") + ":")} ${fgBold(COLORS.tokenCache, fmtTokens(t_.cache_read))}` +
           `  ${fg(COLORS.muted, `(${fmtPercent(cachePct)})`)}` +
@@ -1355,7 +1395,7 @@ export class Dashboard {
     for (const step of sub.steps) {
       const isCold = step.step_number === 1;
       const ctxColor = gaugeColor(step.context_percentage);
-      const ctxBar = asciiBar(step.context_percentage, 18, ctxColor, "black");
+      const ctxBar = asciiBar(step.context_percentage, 18, ctxColor, "#000000");
 
       const tag = isCold
         ? fg("yellow", ` [${t("steps.cold_start")}]`)
@@ -1537,7 +1577,7 @@ export class Dashboard {
       top: 11, left: 3, width: 12, height: 3,
       content: `  ${t("settings.save")}  `,
       tags: true, border: { type: "line" }, mouse: true, keys: true,
-      style: { fg: "black", bg: "green", border: { fg: "green" }, focus: { bg: "white" }, hover: { bg: "white" } },
+      style: { fg: "#000000", bg: "green", border: { fg: "green" }, focus: { bg: "white" }, hover: { bg: "white" } },
     });
 
     const cancelBtn = blessed.button({
@@ -1545,7 +1585,7 @@ export class Dashboard {
       top: 11, left: 18, width: 14, height: 3,
       content: `  ${t("settings.cancel")}  `,
       tags: true, border: { type: "line" }, mouse: true, keys: true,
-      style: { fg: "white", bg: "black", border: { fg: "gray" }, focus: { bg: "gray" }, hover: { bg: "gray" } },
+      style: { fg: "white", bg: "#000000", border: { fg: "gray" }, focus: { bg: "gray" }, hover: { bg: "gray" } },
     });
 
     const hintText = blessed.text({
@@ -1586,6 +1626,7 @@ export class Dashboard {
 
     const line =
       ` ${hint("↑↓", t("keys.navigate"))}` +
+      sep + hint("/", t("search.shortcut")) +
       sep + hint("N", t("keys.rename")) +
       sep + hint("D", t("keys.details")) +
       sep + hint("S", t("keys.steps")) +
@@ -1599,9 +1640,8 @@ export class Dashboard {
   }
 
   private updatePanelLabels(): void {
-    this.sessionListBox.options.label = ` ${t("panel.sessions")} `;
+    this.sessionBox.options.label = ` ${t("panel.sessions")} `;
     this.contextBox.options.label = ` ${t("panel.context")} `;
-    this.tokenBox.options.label = ` ${t("panel.composition")} `;
     this.timelineBox.options.label = ` ${t("panel.timeline")} `;
     this.stepsOverlay.options.label = ` ${t("panel.steps")} `;
     this.toolsOverlay.options.label = ` ${t("panel.tools")} `;

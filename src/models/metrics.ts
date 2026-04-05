@@ -74,6 +74,11 @@ export interface IStepMetrics {
   timestamp: number;            // time_created of the assistant message
   duration_ms: number;          // time.completed - time.created
 
+  // Identity for this specific step (can differ across steps in multi-model sessions)
+  model_id: string;             // model used in this step
+  agent: string;                // agent used in this step
+  user_prompt: string;          // user message that triggered this step (first ~120 chars)
+
   // Token breakdown for THIS step
   tokens: {
     total: number;              // Context window size in this step (grows across steps)

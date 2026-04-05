@@ -17,7 +17,7 @@ export const COLORS = {
   gaugeLow: "green", // < 50%
   gaugeMedium: "yellow", // 50-80%
   gaugeHigh: "red", // > 80%
-  gaugeEmpty: "black",
+  gaugeEmpty: "#000000",
 
   // Token categories
   tokenInput: "blue",
@@ -55,7 +55,7 @@ export const COLORS = {
   normal: "white",
 
   // UI chrome
-  footer: "black",
+  footer: "#000000",
   footerText: "white",
   keyHint: "cyan",
   keyLabel: "white",
@@ -94,7 +94,7 @@ export function asciiBar(
   filled: number,
   width: number,
   color: string,
-  emptyColor = "black",
+  emptyColor = "#000000",
 ): string {
   const filledCount = Math.round((Math.min(100, Math.max(0, filled)) / 100) * width);
   const emptyCount = width - filledCount;
