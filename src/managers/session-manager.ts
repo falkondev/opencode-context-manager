@@ -1,3 +1,5 @@
+import { Database } from "bun:sqlite";
+
 import type { IDbSession } from "../models/session.ts";
 import type {
   ISessionMetrics,
@@ -23,8 +25,10 @@ export class SessionManager {
   private currentSessionId: string | null = null;
   private summaries: ISessionSummary[] = [];
   private currentMetrics: ISessionMetrics | null = null;
+  private dbPath: string;
 
   constructor(dbPath: string) {
+    this.dbPath = dbPath;
     this.reader = new SqliteReader(dbPath);
     this.analyzer = new SessionAnalyzer();
     const config = loadConfig();
@@ -57,6 +61,45 @@ export class SessionManager {
 
   public getCurrentMetrics(): ISessionMetrics | null {
     return this.currentMetrics;
+  }
+
+  /**
+   * Renames a session by updating its title in the SQLite database.
+   * Opens a separate writable connection (the reader is read-only).
+   * Returns true on success, false on failure.
+   */
+  public renameSession(sessionId: string, newTitle: string): boolean {
+    let db: Database | null = null;
+    try {
+      db = new Database(this.dbPath, { readonly: false, create: false });
+      const stmt = db.prepare("UPDATE session SET title = ? WHERE id = ?");
+      stmt.run(newTitle, sessionId);
+      logger.info("session-manager", `Session renamed: ${sessionId} → "${newTitle}"`);
+
+      // Update cached summaries in-place so the UI reflects the change immediately
+      for (const s of this.summaries) {
+        if (s.id === sessionId) {
+          s.title = newTitle;
+        }
+      }
+      if (this.currentMetrics && this.currentMetrics.session.id === sessionId) {
+        this.currentMetrics.session.title = newTitle;
+      }
+      // Also update the raw sessions list
+      for (const s of this.sessions) {
+        if (s.id === sessionId) {
+          s.title = newTitle;
+        }
+      }
+
+      this.notify();
+      return true;
+    } catch (err) {
+      logger.error("session-manager", `renameSession(${sessionId}) failed`, err);
+      return false;
+    } finally {
+      db?.close();
+    }
   }
 
   public getSummaries(): ISessionSummary[] {

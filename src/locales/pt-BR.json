@@ -118,6 +118,7 @@
   "timeline.patch": "Patch gravado",
 
   "keys.navigate": "Navegar sessões",
+  "keys.rename": "Renomear sessão",
   "keys.details": "Detalhes técnicos",
   "keys.steps": "Etapas",
   "keys.tools": "Ferramentas",
@@ -150,5 +151,9 @@
   "misc.na": "N/D",
   "misc.yes": "Sim",
   "misc.no": "Não",
-  "misc.free_cost": "$0,00"
+  "misc.free_cost": "$0,00",
+
+  "rename.title": "RENOMEAR SESSÃO",
+  "rename.hint_enter": "Enter para confirmar",
+  "rename.hint_escape": "Escape para cancelar"
 }

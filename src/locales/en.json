@@ -118,6 +118,7 @@
   "timeline.patch": "Patch written",
 
   "keys.navigate": "Navigate sessions",
+  "keys.rename": "Rename session",
   "keys.details": "Technical details",
   "keys.steps": "Steps",
   "keys.tools": "Tools",
@@ -150,5 +151,9 @@
   "misc.na": "N/A",
   "misc.yes": "Yes",
   "misc.no": "No",
-  "misc.free_cost": "$0.00"
+  "misc.free_cost": "$0.00",
+
+  "rename.title": "RENAME SESSION",
+  "rename.hint_enter": "Enter to confirm",
+  "rename.hint_escape": "Escape to cancel"
 }

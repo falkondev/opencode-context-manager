@@ -52,6 +52,12 @@ async function main(): Promise<void> {
     manager.refresh();
   });
 
+  // Wire up: rename request from UI → manager
+  dashboard.onRename((id, newTitle) => {
+    logger.debug("main", `Rename session: ${id} → "${newTitle}"`);
+    return manager.renameSession(id, newTitle);
+  });
+
   // Wire up: data changes from manager → UI
   manager.onRefresh((summaries, current) => {
     dashboard.update(summaries, current);

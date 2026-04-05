@@ -87,7 +87,7 @@ export class SessionAnalyzer {
     const tokens = this.aggregateTokens(assistantMessages);
 
     // Context window — peak turn
-    const peakTurnTokens = this.getPeakTurnTokens(assistantMessages);
+    const peakTurnTokens = this.getPeakTurnTokens(assistantMessages, parts);
     const peakContextTokens = peakTurnTokens.total;
     // Use peak turn's model if available (multi-model sessions)
     const peakContextLimit = this.getContextLimit(
@@ -97,7 +97,7 @@ export class SessionAnalyzer {
       peakContextTokens > 0 ? Math.round((peakContextTokens / peakContextLimit) * 100) : 0;
 
     // Last step tokens (current context window state)
-    const lastStepTokens = this.getLastStepTokens(assistantMessages);
+    const lastStepTokens = this.getLastStepTokens(assistantMessages, parts);
     const lastStepContextLimit = this.getContextLimit(
       lastStepTokens.modelId !== "unknown" ? lastStepTokens.modelId : modelId,
     );
@@ -276,7 +276,7 @@ export class SessionAnalyzer {
   /**
    * Returns the ITokenMetrics for the single turn with the highest total.
    */
-  private getPeakTurnTokens(assistantMsgs: IMessage[]): ITokenMetrics & { modelId: string } {
+  private getPeakTurnTokens(assistantMsgs: IMessage[], parts: IPart[] = []): ITokenMetrics & { modelId: string } {
     let peakTotal = 0;
     let peakMsg: IMessage | undefined;
     for (const msg of assistantMsgs) {
@@ -288,42 +288,102 @@ export class SessionAnalyzer {
         peakMsg = msg;
       }
     }
-    if (!peakMsg?.data.tokens) {
-      return { total: 0, input: 0, output: 0, reasoning: 0, cache_read: 0, cache_write: 0, modelId: "unknown" };
+    if (peakMsg?.data.tokens) {
+      const t = peakMsg.data.tokens;
+      return {
+        total: t.total ?? t.input + t.output,
+        input: t.input,
+        output: t.output,
+        reasoning: t.reasoning,
+        cache_read: t.cache.read,
+        cache_write: t.cache.write,
+        modelId: peakMsg.data.modelID ?? "unknown",
+      };
     }
-    const t = peakMsg.data.tokens;
-    return {
-      total: t.total ?? t.input + t.output,
-      input: t.input,
-      output: t.output,
-      reasoning: t.reasoning,
-      cache_read: t.cache.read,
-      cache_write: t.cache.write,
-      modelId: peakMsg.data.modelID ?? "unknown",
-    };
+
+    // Fallback: find peak across step-finish parts
+    const stepFinishParts = parts.filter((p) => p.data.type === "step-finish");
+    let peakStepFinish: IPart | undefined;
+    let peakStepTotal = 0;
+    for (const p of stepFinishParts) {
+      const t = (p.data as IPartDataStepFinish).tokens;
+      if (!t) continue;
+      const turn = t.total ?? t.input + t.output;
+      if (turn > peakStepTotal) {
+        peakStepTotal = turn;
+        peakStepFinish = p;
+      }
+    }
+    if (peakStepFinish) {
+      const t = (peakStepFinish.data as IPartDataStepFinish).tokens;
+      if (t) {
+        return {
+          total: t.total ?? t.input + t.output,
+          input: t.input,
+          output: t.output,
+          reasoning: t.reasoning,
+          cache_read: t.cache.read,
+          cache_write: t.cache.write,
+          modelId: "unknown",
+        };
+      }
+    }
+
+    return { total: 0, input: 0, output: 0, reasoning: 0, cache_read: 0, cache_write: 0, modelId: "unknown" };
   }
 
   /**
    * Returns ITokenMetrics for the LAST completed assistant message.
    * This represents the current state of the context window.
    */
-  private getLastStepTokens(assistantMsgs: IMessage[]): ITokenMetrics & { modelId: string } {
-    // Find the last message that has token data
-    const withTokens = assistantMsgs.filter((m) => m.data.tokens);
+  private getLastStepTokens(assistantMsgs: IMessage[], parts: IPart[] = []): ITokenMetrics & { modelId: string } {
+    // Find the last message that has real token data (skip aborted steps with all-zero tokens)
+    const withTokens = assistantMsgs.filter((m) => {
+      const tk = m.data.tokens;
+      if (!tk) return false;
+      const total = tk.total ?? tk.input + tk.output;
+      return total > 0 || tk.input > 0 || tk.output > 0;
+    });
     const lastMsg = withTokens[withTokens.length - 1];
-    if (!lastMsg?.data.tokens) {
-      return { total: 0, input: 0, output: 0, reasoning: 0, cache_read: 0, cache_write: 0, modelId: "unknown" };
+    if (lastMsg?.data.tokens) {
+      const t = lastMsg.data.tokens;
+      return {
+        total: t.total ?? t.input + t.output,
+        input: t.input,
+        output: t.output,
+        reasoning: t.reasoning,
+        cache_read: t.cache.read,
+        cache_write: t.cache.write,
+        modelId: lastMsg.data.modelID ?? "unknown",
+      };
     }
-    const t = lastMsg.data.tokens;
-    return {
-      total: t.total ?? t.input + t.output,
-      input: t.input,
-      output: t.output,
-      reasoning: t.reasoning,
-      cache_read: t.cache.read,
-      cache_write: t.cache.write,
-      modelId: lastMsg.data.modelID ?? "unknown",
-    };
+
+    // Fallback: read from the last step-finish part (tokens are embedded there)
+    // Skip aborted step-finish parts that carry all-zero token counts
+    const stepFinishParts = parts.filter((p) => {
+      if (p.data.type !== "step-finish") return false;
+      const tk = (p.data as IPartDataStepFinish).tokens;
+      if (!tk) return false;
+      const total = tk.total ?? tk.input + tk.output;
+      return total > 0 || tk.input > 0 || tk.output > 0;
+    });
+    const lastStepFinish = stepFinishParts[stepFinishParts.length - 1];
+    if (lastStepFinish) {
+      const t = (lastStepFinish.data as IPartDataStepFinish).tokens;
+      if (t) {
+        return {
+          total: t.total ?? t.input + t.output,
+          input: t.input,
+          output: t.output,
+          reasoning: t.reasoning,
+          cache_read: t.cache.read,
+          cache_write: t.cache.write,
+          modelId: "unknown",
+        };
+      }
+    }
+
+    return { total: 0, input: 0, output: 0, reasoning: 0, cache_read: 0, cache_write: 0, modelId: "unknown" };
   }
 
   /**
@@ -351,8 +411,21 @@ export class SessionAnalyzer {
 
     for (let i = 0; i < assistantMsgs.length; i++) {
       const msg = assistantMsgs[i]!;
-      const t = msg.data.tokens;
-      if (!t) continue; // skip messages without token data
+      let t = msg.data.tokens;
+
+      // Fallback: read tokens from the step-finish part when absent from the message
+      if (!t) {
+        const msgParts = partsByMessage.get(msg.id) ?? [];
+        const stepFinishPart = msgParts.find((p) => p.data.type === "step-finish");
+        if (stepFinishPart) {
+          const sfTokens = (stepFinishPart.data as IPartDataStepFinish).tokens;
+          if (sfTokens) {
+            t = sfTokens;
+          }
+        }
+      }
+
+      if (!t) continue; // skip messages without token data in any source
 
       const total = t.total ?? t.input + t.output;
       // Skip aborted/empty steps (no context window snapshot — total would be 0)
@@ -728,7 +801,7 @@ export class SessionAnalyzer {
       const childParts = childEntry?.parts ?? [];
       const childAssistant = childMessages.filter((m) => m.data.role === "assistant");
 
-      const peakTurn = this.getPeakTurnTokens(childAssistant);
+      const peakTurn = this.getPeakTurnTokens(childAssistant, childParts);
       const peakTokens = peakTurn.total;
       const effectiveModel = peakTurn.modelId !== "unknown" ? peakTurn.modelId : modelId;
       const childContextLimit = this.getContextLimit(effectiveModel);

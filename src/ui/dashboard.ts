@@ -61,6 +61,8 @@ export class Dashboard {
   private stepsOverlay!: Widgets.BoxElement;
   private toolsOverlay!: Widgets.BoxElement;
   private subagentOverlay!: Widgets.BoxElement;
+  private renameOverlay!: Widgets.BoxElement;
+  private renameInput!: Widgets.TextboxElement;
 
   // State
   private summaries: ISessionSummary[] = [];
@@ -71,9 +73,11 @@ export class Dashboard {
   private stepsVisible = false;
   private toolsVisible = false;
   private subagentVisible = false;
+  private renameVisible = false;
   private selectedSubagentIndex = 0;
   private onSelectSession: ((id: string) => void) | null = null;
   private onRefreshRequest: (() => void) | null = null;
+  private onRenameSessionRequest: ((id: string, newTitle: string) => boolean) | null = null;
 
   constructor(config: IAppConfig) {
     this.config = config;
@@ -98,6 +102,10 @@ export class Dashboard {
 
   public onRefresh(cb: () => void): void {
     this.onRefreshRequest = cb;
+  }
+
+  public onRename(cb: (id: string, newTitle: string) => boolean): void {
+    this.onRenameSessionRequest = cb;
   }
 
   public update(summaries: ISessionSummary[], current: ISessionMetrics | null): void {
@@ -157,7 +165,7 @@ export class Dashboard {
       scrollbar: { ch: "│" } as any,
       mouse: true,
       keys: true,
-      vi: true,
+      vi: false,
       style: {
         border: { fg: COLORS.border },
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -342,6 +350,48 @@ export class Dashboard {
     this.screen.append(this.toolsOverlay);
     this.screen.append(this.subagentOverlay);
     this.screen.append(this.settingsOverlay);
+
+    // Rename overlay — small centered dialog with a textbox
+    this.renameOverlay = blessed.box({
+      top: "center",
+      left: "center",
+      width: 60,
+      height: 7,
+      label: ` ${t("rename.title")} `,
+      tags: true,
+      border: { type: "line" },
+      keys: true,
+      mouse: true,
+      hidden: true,
+      style: {
+        border: { fg: COLORS.header },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        label: { fg: COLORS.header, bold: true } as any,
+        fg: "white",
+        bg: "black",
+      },
+    });
+
+    this.renameInput = blessed.textbox({
+      parent: this.renameOverlay,
+      top: 1,
+      left: 1,
+      width: "100%-4",
+      height: 3,
+      inputOnFocus: true,
+      keys: true,
+      mouse: true,
+      tags: false,
+      border: { type: "line" },
+      style: {
+        border: { fg: COLORS.border },
+        fg: "white",
+        bg: "black",
+        focus: { border: { fg: COLORS.header } },
+      },
+    });
+
+    this.screen.append(this.renameOverlay);
   }
 
   // ─── Key / Mouse Bindings ──────────────────────────────────────────────────
@@ -388,17 +438,25 @@ export class Dashboard {
       this.toggleSubagent();
     });
 
-    // Navigate sessions
-    this.screen.key(["up", "k"], () => {
+    // Rename session (N key)
+    this.screen.key(["n", "N"], () => {
+      if (this.anyOverlayVisible()) return;
+      this.openRename();
+    });
+
+    // Navigate sessions — bind keys on the list widget (not on screen) to avoid
+    // double-move. With vi:true, blessed.list also handles up/down/j/k internally
+    // which would cause two moves per keypress if we also bound them on screen.
+    this.sessionListBox.key(["up", "k"], () => {
       if (this.anyOverlayVisible()) return;
       this.navigateSession(-1);
     });
-    this.screen.key(["down", "j"], () => {
+    this.sessionListBox.key(["down", "j"], () => {
       if (this.anyOverlayVisible()) return;
       this.navigateSession(1);
     });
 
-    // Session list mouse click
+    // Session list mouse click / Enter
     this.sessionListBox.on("select", (_el, index) => {
       this.selectSessionAt(index);
     });
@@ -466,7 +524,8 @@ export class Dashboard {
       this.settingsVisible ||
       this.stepsVisible ||
       this.toolsVisible ||
-      this.subagentVisible
+      this.subagentVisible ||
+      this.renameVisible
     );
   }
 
@@ -476,6 +535,7 @@ export class Dashboard {
     if (this.stepsVisible) this.hideSteps();
     if (this.toolsVisible) this.hideTools();
     if (this.subagentVisible) this.hideSubagent();
+    if (this.renameVisible) this.closeRename();
   }
 
   private toggleDetails(): void {
@@ -598,7 +658,53 @@ export class Dashboard {
     this.screen.render();
   }
 
-  // ─── Renderers ─────────────────────────────────────────────────────────────
+  // ─── Rename Overlay ─────────────────────────────────────────────────────────
+
+  private openRename(): void {
+    const s = this.summaries[this.selectedIndex];
+    if (!s) return;
+
+    this.renameVisible = true;
+
+    // Build hint text below the input
+    const hint = fg(COLORS.muted, `${t("rename.hint_enter")}  ${t("rename.hint_escape")}`);
+    this.renameOverlay.setContent(`\n\n\n\n ${hint}`);
+
+    // Pre-fill the input with the current session title
+    this.renameInput.setValue(s.title);
+    this.renameOverlay.show();
+    this.renameInput.focus();
+    this.screen.render();
+
+    // Handle submission — fires when user presses Enter inside the textbox
+    const onSubmit = (value: string) => {
+      this.renameInput.removeAllListeners("submit");
+      this.renameInput.removeAllListeners("cancel");
+      const trimmed = value.trim();
+      if (trimmed && trimmed !== s.title) {
+        this.onRenameSessionRequest?.(s.id, trimmed);
+      }
+      this.closeRename();
+    };
+
+    const onCancel = () => {
+      this.renameInput.removeAllListeners("submit");
+      this.renameInput.removeAllListeners("cancel");
+      this.closeRename();
+    };
+
+    this.renameInput.once("submit", onSubmit);
+    this.renameInput.once("cancel", onCancel);
+  }
+
+  private closeRename(): void {
+    this.renameVisible = false;
+    this.renameOverlay.hide();
+    this.sessionListBox.focus();
+    this.screen.render();
+  }
+
+
 
   private renderHeader(): void {
     const m = this.currentMetrics;
@@ -706,7 +812,7 @@ export class Dashboard {
     lines.push("");
 
     // ── Billing summary (all steps) ─────────────────────────────────────────
-    lines.push(`  ${fgBold(COLORS.header, t("billing.all_steps"))}  ${fg(COLORS.muted, `(${stepNum} ${t("billing.steps_label")})}`)}`);
+    lines.push(`  ${fgBold(COLORS.header, t("billing.all_steps"))}  ${fg(COLORS.muted, `(${stepNum} ${t("billing.steps_label")})`)}`);;
     lines.push("");
 
     // Fresh input vs cache reused (the key distinction)
@@ -974,7 +1080,7 @@ export class Dashboard {
     const totalSteps = steps.length;
 
     // Summary header
-    lines.push(`  ${fgBold(COLORS.header, t("steps.title"))}  ${fg(COLORS.muted, `(${totalSteps} ${t("billing.steps_label")})}`)}`);
+    lines.push(`  ${fgBold(COLORS.header, t("steps.title"))}  ${fg(COLORS.muted, `(${totalSteps} ${t("billing.steps_label")})`)}`);;
     lines.push("");
 
     // Aggregate billing summary at top
@@ -1242,7 +1348,7 @@ export class Dashboard {
     // ── Steps ──────────────────────────────────────────────────────────────
     lines.push(
       `  ${fgBold(COLORS.header, t("steps.title"))}  ` +
-      `${fg(COLORS.muted, `(${sub.steps.length} ${t("billing.steps_label")})}`)}`
+        `${fg(COLORS.muted, `(${sub.steps.length} ${t("billing.steps_label")})`)}`,
     );
     lines.push("");
 
@@ -1480,6 +1586,7 @@ export class Dashboard {
 
     const line =
       ` ${hint("↑↓", t("keys.navigate"))}` +
+      sep + hint("N", t("keys.rename")) +
       sep + hint("D", t("keys.details")) +
       sep + hint("S", t("keys.steps")) +
       sep + hint("T", t("keys.tools")) +
